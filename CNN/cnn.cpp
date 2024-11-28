@@ -323,6 +323,24 @@ class Tensor3D {
         }
         return result;
     }
+
+    Tensor3D flatten() const {
+        // create tensor of shape (1, depth*height*width, 1)
+        Tensor3D result(1, depth * height * width, 1);
+        
+        // copy values sequentially
+        size_t idx = 0;
+        for (size_t d = 0; d < depth; d++) {
+            for (size_t h = 0; h < height; h++) {
+                for (size_t w = 0; w < width; w++) {
+                    result.data[0][idx][0] = data[d][h][w];
+                    idx++;
+                }
+            }
+        }
+        
+        return result;
+    }
 };
 
 class Layer {
@@ -334,7 +352,7 @@ class Layer {
 
 };
 
-class DenseLayer : Layer{
+class DenseLayer : public Layer {
    public:
     Tensor3D weights;
     Tensor3D bias;
@@ -372,9 +390,8 @@ class DenseLayer : Layer{
         } else if (activation_function == "softmax") {
             output = z.softmax();
         } else {
-            throw std::runtime_error("no activation function found for layer");
+            output = z;
         }
-
         return output;
     }
 
@@ -400,7 +417,7 @@ class DenseLayer : Layer{
     }
 };
 
-class ConvolutionLayer : Layer {
+class ConvolutionLayer : public Layer {
    public:
     std::vector<Tensor3D> weights;
     std::vector<double> bias;
@@ -986,7 +1003,8 @@ class NeuralNetwork {
     // add a layer to the network
     template<typename LayerType>
     void add_layer(std::unique_ptr<LayerType> layer) {
-        layers.push_back(std::move(layer));
+        // fixme add checking for compatible layer types/dimensions
+        layers.push_back(std::unique_ptr<Layer>(layer.release()));
     }
 
  
@@ -1007,30 +1025,61 @@ class NeuralNetwork {
      * @param input The input matrix.
      * @return The output matrix after passing through all layers.
      */
-    Tensor3D feedforward(const Tensor3D &input) {
-        // fixme this currently does not work - need a bridge between convolutional and dense layers
+    Tensor3D feedforward(const Tensor3D& input) {
         Tensor3D current = input;
-        for (auto &layer : layers) {
-            current = layer->feedforward(current);
+        
+        for (size_t i = 0; i < layers.size(); i++) {
+            // attempt to cast base type pointer to derived type pointer (returns nullptr if not possible)
+            auto* current_conv = dynamic_cast<ConvolutionLayer*>(layers[i].get());
+            auto* current_dense = dynamic_cast<DenseLayer*>(layers[i].get());
+            
+            // get next layer type (if it exists)
+            ConvolutionLayer* next_conv = nullptr;
+            DenseLayer* next_dense = nullptr;
+            if (i + 1 < layers.size()) {
+                next_conv = dynamic_cast<ConvolutionLayer*>(layers[i + 1].get());
+                next_dense = dynamic_cast<DenseLayer*>(layers[i + 1].get());
+            }
+
+            // handle transitions
+            if (current_conv) {
+                current = current_conv->feedforward(current);
+                
+                // if next layer is dense, we need to flatten
+                if (next_dense) {
+                    // reshape to (1, N, 1) where N is total elements
+                    size_t total_elements = current.depth * current.height * current.width;
+                    current = current.flatten();
+                }
+            }
+            // once we hit a dense layer all layers after that must be dense // todo add logic to ensure this
+            else if (current_dense) {
+                current = current_dense->feedforward(current);
+            }
+            else {
+                throw std::runtime_error("unknown layer type encountered");
+            }
         }
         return current;
     }
-
 };
 
 // runner code
 int main() {
-    int input_channels = 2;
-    int output_channels = 5;
+    int input_width = 28;
+    int input_height = 28;
+    int input_channels = 3;
     int kernel_size = 3;
-    ConvolutionLayer convlayer(input_channels, output_channels, kernel_size);
-    Tensor3D kernel(input_channels, kernel_size, kernel_size);
-    Tensor3D result = convlayer.feedforward(kernel);
 
-    // example usage
-    // NeuralNetwork nn;
-    // nn.add_layer(std::make_unique<ConvolutionLayer>(input_channels, output_channels, kernel_size));
-    // nn.add_layer(std::make_unique<DenseLayer>(100, 10, "sigmoid"));
-    // nn.add_layer(std::make_unique<DenseLayer>(10, 1, "none"));
+    // test usage
+    NeuralNetwork nn;
+    nn.add_layer(std::make_unique<ConvolutionLayer>(input_channels, 5, kernel_size));
+    nn.add_layer(std::make_unique<ConvolutionLayer>(5, 10, kernel_size));
+    nn.add_layer(std::make_unique<DenseLayer>(10 * input_width * input_height, 10, "sigmoid")); // assuming 'same' padding
+    nn.add_layer(std::make_unique<DenseLayer>(10, 1, "none"));
 
+    // test feedforward
+    Tensor3D input(input_channels, input_height, input_width);
+    Tensor3D output = nn.feedforward(input);
+    std::cout << "done" << std::endl;
 }
