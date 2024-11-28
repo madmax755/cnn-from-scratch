@@ -293,14 +293,69 @@ class Matrix {
 
 class Tensor3D {
    public:
-    std::vector<Matrix> data;
-    size_t rows, cols, depth;
+    std::vector<std::vector<std::vector<double>>> data;
+    size_t height, width, depth;
 
-    Tensor3D(size_t rows, size_t cols, size_t depth) : rows(rows), cols(cols), depth(depth) {
-        data.reserve(depth);
-        for (size_t i = 0; i < depth; i++) {
-            data.emplace_back(rows, cols);
+    // default constructor
+    Tensor3D() : height(0), width(0), depth(0) {}
+
+    Tensor3D(size_t width, size_t height, size_t depth) : height(height), width(width), depth(depth) {
+        data.resize(depth, std::vector<std::vector<double>>(height, std::vector<double>(width, 0.0)));
+    }
+
+    void he_initialize() {
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        double std_dev = std::sqrt(2.0 / (height * width * depth));
+        std::normal_distribution<> dis(0, std_dev);
+
+        for (auto& channel : data) {
+            for (auto& row : channel) {
+                for (auto& val : row) {
+                    val = dis(gen);
+                }
+            }
         }
+    }
+    
+    // compute dot product with a kernel centered at specific position - the argument must be the kernel
+    double dot_with_kernel_at_postion(const Tensor3D &kernel, size_t start_x, size_t start_y) const {
+        double sum = 0.0;
+
+        // to facilitate start_x and start_y being the centre postion
+        int kernel_width_offset = (kernel.width - 1) / 2;
+        int kernel_height_offset = (kernel.height - 1) / 2;
+
+        // check if the proceeding loop will be out of range for the input kernel
+        if (abs(start_x) < kernel_width_offset or abs(start_x - data[0][0].size()) < kernel_width_offset or
+            abs(start_y) < kernel_height_offset or abs(start_y - data[0].size()) < kernel_height_offset) {
+            throw std::runtime_error("Cannot compute dot product at this postition - index would be out of range in convolution");
+        }
+
+        // iterate through all channels and kernel positions
+        for (size_t d = 0; d < depth; d++) {
+            for (size_t kh = 0; kh < kernel.height; kh++) {
+                for (size_t kw = 0; kw < kernel.width; kw++) {
+                    sum +=
+                        data[d][start_y + kh - kernel_height_offset][start_x + kw - kernel_width_offset] * kernel.data[d][kh][kw];
+                }
+            }
+        }
+        return sum;
+    }
+
+    // return a new tensor with the width and height axis padded by 'amount'.
+    static Tensor3D pad(const Tensor3D &input, int amount = 1) {
+        Tensor3D output(input.width + amount, input.height + amount, input.depth);
+        for (int depth_index = 0; depth_index < output.depth; ++depth_index) {
+            for (int height_index = amount; height_index < output.height - amount; ++height_index) {
+                for (int width_index = amount; width_index < output.width - amount; ++width_index) {
+                    output.data[depth_index][height_index][width_index] =
+                        input.data[depth_index][height_index - amount][width_index - amount];
+                }
+            }
+        }
+        return output;
     }
 };
 
@@ -379,26 +434,56 @@ class ConvolutionLayer {
     int out_channels;
     int kernel_size;
     int stride;
-    int padding;
     std::string mode;
 
-    ConvolutionLayer(int channels_in, int out_channels, int kernel_size, int stride = 1, int padding = 0, std::string mode = "same")
+    ConvolutionLayer(int channels_in, int out_channels, int kernel_size, int stride = 1, std::string mode = "same")
         : channels_in(channels_in),
           out_channels(out_channels),
           kernel_size(kernel_size),
           stride(stride),
-          padding(padding),
           mode(mode) {
-
+        // creates a list of kernel tensors - one for each output channel
         weights.reserve(out_channels);
         for (int i = 0; i < out_channels; i++) {
             weights.emplace_back(kernel_size, kernel_size, channels_in);
+            weights.back().he_initialize();
         }
 
+        // creates a list of bias values - one for each output channel
         bias.reserve(out_channels);
         for (int i = 0; i < out_channels; i++) {
             bias.push_back(0.0);
         }
+    }
+
+    /**
+     * @brief Performs feedforward operation for this layer.
+     * @param input The input tensor usually (x, y, RGB channel).
+     * @return The output tensor after applying the layer's transformation (x, y, output_feature_map)
+     */
+    Tensor3D feedforward(const Tensor3D &input) {
+        Tensor3D output(input.width, input.height, weights.size());
+        int pad_amount = 0;
+
+        if (mode == "same") {
+            Tensor3D padded_input = Tensor3D::pad(input);
+            pad_amount = (kernel_size - 1) / 2;
+
+            for (int feature_map_index = 0; feature_map_index < weights.size(); ++feature_map_index) {
+                for (int y = pad_amount; y < input.height - pad_amount; ++y) {
+                    for (int x = pad_amount; x < input.width - pad_amount; ++x) {
+                        double z = input.dot_with_kernel_at_postion(weights[feature_map_index], x, y) + bias[feature_map_index];
+                        output.data[feature_map_index][y - pad_amount][x - pad_amount] = relu(z);
+                        // todo replace in the future with chosen activation function set by user
+                    }
+                }
+            }
+
+        } else {
+            throw std::runtime_error("mode not specified or handled correctly");
+        }
+
+        return output;
     }
 };
 
@@ -906,7 +991,6 @@ class NeuralNetwork {
     std::unique_ptr<Loss> loss;
     // have to use a pointer otherwise class cannot be constructed (mutex is not moveable/copyable etc.)
     std::unique_ptr<std::mutex> layers_mutex;
-    std::unique_ptr<TrainingHistoryLogger> history_logger;
 
     struct EvaluationMetrics {
         double loss;
@@ -982,10 +1066,6 @@ class NeuralNetwork {
      * @param new_loss A unique pointer to the new Loss object.
      */
     void set_loss(std::unique_ptr<Loss> new_loss) { loss = std::move(new_loss); }
-
-    void enable_history_logging(const std::string &filename) {
-        history_logger = std::make_unique<TrainingHistoryLogger>(filename);
-    }
 
     // train the neural network using optimiser set
     void train_mt_optimiser(const std::vector<std::vector<Matrix>> &training_data,
@@ -1083,42 +1163,9 @@ class NeuralNetwork {
 
                 // apply gradients
                 optimiser->compute_and_apply_updates(layers, avg_gradient);
-
-                if (history_logger) {
-                    // Calculate average loss across batch (fast)
-                    double batch_loss = 0.0;
-                    for (size_t i = 0; i < batch_outputs.size(); ++i) {
-                        batch_loss += loss->compute(batch_outputs[i], batch_targets[i]);
-                    }
-                    batch_loss /= batch_outputs.size();
-
-                    TrainingMetrics metrics{batch_loss,
-                                            0.0,  // These will be updated properly at epoch end
-                                            0.0,
-                                            0.0,
-                                            0.0,
-                                            epoch + 1,
-                                            static_cast<int>(batch_start / batch_size) + 1,
-                                            std::chrono::system_clock::now()};
-
-                    history_logger->log_metrics(metrics);
-                }
             }
             auto eval_results = evaluate_nn(eval_data);
-
-            // special metrics for epoch end
-            if (history_logger) {
-                TrainingMetrics metrics{eval_results.loss,  // current validation loss
-                                        eval_results.accuracy,
-                                        eval_results.precision,
-                                        eval_results.recall,
-                                        eval_results.f1_score,
-                                        epoch + 1,
-                                        -1,  // Special batch number to indicate epoch-end metrics
-                                        std::chrono::system_clock::now()};
-                history_logger->log_metrics(metrics);
-                std::cout << eval_results << std::endl;
-            }
+            std::cout << eval_results << std::endl;
         }
     }
 
@@ -1300,25 +1347,13 @@ class NeuralNetwork {
 };
 
 // runner code
-int main() {
+int main() { 
+    int input_channels = 2;
+    int output_channels = 5;
+    int kernel_size = 3;
+    ConvolutionLayer convlayer(input_channels, output_channels, kernel_size);
+    Tensor3D kernel(kernel_size, kernel_size, input_channels);
 
-    // create the neural network
-    int input_size = 28 * 28;
-    std::vector<int> topology = {input_size, 64, 32, 32, 10};
-    std::vector<std::string> activation_functions = {"sigmoid", "sigmoid", "sigmoid", "softmax"};
-    NeuralNetwork nn(topology, activation_functions);
-    nn.enable_history_logging("mnist_training_metrics.csv");
+    Tensor3D result = convlayer.feedforward(kernel);
 
-    int batch_size = 128;
-    int epochs = 50;
-    // double learning_rate = 0.1;
-    // double momentum_coefficient = 0.8;
-
-    // train the neural network
-    nn.set_optimiser(std::make_unique<AdamWOptimiser>());
-    nn.set_loss(std::make_unique<CrossEntropyLoss>());
-    nn.train_mt_optimiser(training_set, eval_set, epochs, batch_size);
-    nn.save_model("mnist.model");
-
-    return 0;
 }
