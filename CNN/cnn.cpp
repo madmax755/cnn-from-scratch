@@ -49,261 +49,22 @@ std::vector<unsigned char> read_file(const std::string &path) {
     }
 }
 
-// matrix class for handling matrix operations
-class Matrix {
-   public:
-    std::vector<std::vector<double>> data;  // 2D vector to store matrix data
-    size_t rows, cols;                      // dimensions of the matrix
-
-    // default constructor
-    Matrix() : rows(0), cols(0) {}
-
-    /**
-     * @brief Constructs a Matrix object with the specified dimensions.
-     * @param rows Number of rows in the matrix.
-     * @param cols Number of columns in the matrix.
-     */
-    Matrix(size_t rows, size_t cols) : rows(rows), cols(cols) {
-        data.resize(rows,
-                    std::vector<double>(cols, 0.0));  // resise the data vector to have 'rows' elements with a vector as the value
-    }
-
-    /**
-     * @brief Initializes the matrix with random values between -1 and 1.
-     */
-    void uniform_initialise() {
-        std::random_device rd;                            // obtain a random number from hardware
-        std::mt19937 gen(rd());                           // seed the generator
-        std::uniform_real_distribution<> dis(-1.0, 1.0);  // define the range
-        for (auto &row : data) {
-            for (auto &elem : row) {
-                elem = dis(gen);  // generate random number
-            }
-        }
-    }
-
-    /**
-     * @brief Initializes the matrix with zeros.
-     */
-    void zero_initialise() {
-        for (auto &row : data) {
-            for (auto &elem : row) {
-                elem = 0;  // generate random number
-            }
-        }
-    }
-
-    /**
-     * @brief Initializes the matrix using Xavier initialization method.
-     * Suitable for sigmoid activation functions.
-     */
-    void xavier_initialize() {
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        double limit = sqrt(6.0 / (rows + cols));
-        std::uniform_real_distribution<> dis(-limit, limit);
-        for (auto &row : data) {
-            for (auto &elem : row) {
-                elem = dis(gen);
-            }
-        }
-    }
-
-    /**
-     * @brief Initializes the matrix using He initialization method.
-     * Suitable for ReLU activation functions.
-     */
-    void he_initialise() {
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        double std_dev = sqrt(2.0 / cols);
-        std::normal_distribution<> dis(0, std_dev);
-        for (auto &row : data) {
-            for (auto &elem : row) {
-                elem = dis(gen);
-            }
-        }
-    }
-
-    /**
-     * @brief Overloads the multiplication operator for matrix multiplication.
-     * @param other The matrix to multiply with.
-     * @return The resulting matrix after multiplication.
-     */
-    Matrix operator*(const Matrix &other) const {
-        if (cols != other.rows) {
-            std::cerr << "Attempted to multiply matrices of incompatible dimensions: "
-                      << "(" << rows << "x" << cols << ") * (" << other.rows << "x" << other.cols << ")" << std::endl;
-            throw std::invalid_argument("Matrix dimensions don't match for multiplication");
-        }
-        Matrix result(rows, other.cols);
-        // weird loop order (k before j) makes more cache friendly
-        for (size_t i = 0; i < rows; i++) {
-            for (size_t k = 0; k < cols; k++) {
-                for (size_t j = 0; j < other.cols; j++) {
-                    result.data[i][j] += data[i][k] * other.data[k][j];
-                }
-            }
-        }
-        return result;
-    }
-
-    /**
-     * @brief Overloads the addition operator for element-wise matrix addition.
-     * @param other The matrix to add.
-     * @return The resulting matrix after addition.
-     */
-    Matrix operator+(const Matrix &other) const {
-        if (rows != other.rows or cols != other.cols) {
-            throw std::invalid_argument("Matrix dimensions don't match for addition");
-        }
-        Matrix result(rows, cols);
-        for (size_t i = 0; i < rows; i++) {
-            for (size_t j = 0; j < cols; j++) {
-                result.data[i][j] = data[i][j] + other.data[i][j];
-            }
-        }
-        return result;
-    }
-
-    /**
-     * @brief Overloads the subtraction operator for element-wise matrix subtraction.
-     * @param other The matrix to subtract.
-     * @return The resulting matrix after subtraction.
-     */
-    Matrix operator-(const Matrix &other) const {
-        if (rows != other.rows or cols != other.cols) {
-            throw std::invalid_argument("Matrix dimensions don't match for subtraction");
-        }
-        Matrix result(rows, cols);
-        for (size_t i = 0; i < rows; i++) {
-            for (size_t j = 0; j < cols; j++) {
-                result.data[i][j] = data[i][j] - other.data[i][j];
-            }
-        }
-        return result;
-    }
-
-    /**
-     * @brief Overloads the multiplication operator for scalar multiplication.
-     * @param scalar The scalar value to multiply with.
-     * @return The resulting matrix after scalar multiplication.
-     */
-    Matrix operator*(double scalar) const {
-        Matrix result(rows, cols);
-        for (size_t i = 0; i < rows; i++) {
-            for (size_t j = 0; j < cols; j++) {
-                result.data[i][j] = data[i][j] * scalar;
-            }
-        }
-        return result;
-    }
-
-    /**
-     * @brief Computes the transpose of the matrix.
-     * @return The transposed matrix.
-     */
-    Matrix transpose() const {
-        Matrix result(cols, rows);
-        for (size_t i = 0; i < rows; i++) {
-            for (size_t j = 0; j < cols; j++) {
-                result.data[j][i] = data[i][j];
-            }
-        }
-        return result;
-    }
-
-    /**
-     * @brief Computes the Hadamard product (element-wise multiplication) of two matrices.
-     * @param other The matrix to perform Hadamard product with.
-     * @return The resulting matrix after Hadamard product.
-     */
-    Matrix hadamard(const Matrix &other) const {
-        if (rows != other.rows or cols != other.cols) {
-            throw std::invalid_argument("Matrix dimensions don't match for Hadamard product");
-        }
-        Matrix result(rows, cols);
-        for (size_t i = 0; i < rows; i++) {
-            for (size_t j = 0; j < cols; j++) {
-                result.data[i][j] = data[i][j] * other.data[i][j];
-            }
-        }
-        return result;
-    }
-
-    /**
-     * @brief Applies a function to every element in the matrix.
-     * @param func A function pointer to apply to each element.
-     * @return The resulting matrix after applying the function.
-     */
-    Matrix apply(double (*func)(double)) const {
-        Matrix result(rows, cols);
-        for (size_t i = 0; i < rows; i++) {
-            for (size_t j = 0; j < cols; j++) {
-                result.data[i][j] = func(data[i][j]);
-            }
-        }
-        return result;
-    }
-
-    /**
-     * @brief Applies a function to every element in the matrix.
-     * @tparam Func The type of the callable object.
-     * @param func A callable object to apply to each element.
-     * @return The resulting matrix after applying the function.
-     */
-    template <typename Func>
-    Matrix apply(Func func) const {
-        Matrix result(rows, cols);
-        for (size_t i = 0; i < rows; i++) {
-            for (size_t j = 0; j < cols; j++) {
-                result.data[i][j] = func(data[i][j]);
-            }
-        }
-        return result;
-    }
-
-    /**
-     * @brief Applies the softmax function to the matrix.
-     * @return The resulting matrix after applying softmax.
-     */
-    Matrix softmax() const {
-        Matrix result(rows, cols);
-
-        for (size_t j = 0; j < cols; ++j) {
-            double max_val = -std::numeric_limits<double>::infinity();
-            for (size_t i = 0; i < rows; ++i) {
-                max_val = std::max(max_val, data[i][j]);
-            }
-
-            double sum = 0.0;
-            for (size_t i = 0; i < rows; ++i) {
-                result.data[i][j] = std::exp(data[i][j] - max_val);
-                sum += result.data[i][j];
-            }
-
-            for (size_t i = 0; i < rows; ++i) {
-                result.data[i][j] /= sum;
-            }
-        }
-
-        return result;
-    }
-};
-
 class Tensor3D {
    public:
     std::vector<std::vector<std::vector<double>>> data;
     size_t height, width, depth;
 
-    // default constructor
     Tensor3D() : height(0), width(0), depth(0) {}
+
+    // for compatability with old matrix code
+    Tensor3D(size_t rows, size_t cols) : depth(1), height(rows), width(cols) {
+        data.resize(depth, std::vector<std::vector<double>>(height, std::vector<double>(width, 0.0)));
+    }
 
     Tensor3D(size_t depth, size_t height, size_t width) : height(height), width(width), depth(depth) {
         data.resize(depth, std::vector<std::vector<double>>(height, std::vector<double>(width, 0.0)));
     }
 
-    
     // compute dot product with a kernel centered at specific position - the argument must be the kernel
     double dot_with_kernel_at_postion(const Tensor3D &kernel, size_t start_x, size_t start_y) const {
         double sum = 0.0;
@@ -339,48 +100,60 @@ class Tensor3D {
                     output.data[depth_index][height_index][width_index] =
                         input.data[depth_index][height_index - amount][width_index - amount];
                 }
-
             }
         }
         return output;
     }
 
-
     // initialization methods
-    void he_initialize() {
+    void he_initialise() {
         std::random_device rd;
         std::mt19937 gen(rd());
         double std_dev = std::sqrt(2.0 / (height * width * depth));
         std::normal_distribution<> dis(0, std_dev);
 
-        for (auto& channel : data) {
-            for (auto& row : channel) {
-                for (auto& val : row) {
+        for (auto &channel : data) {
+            for (auto &row : channel) {
+                for (auto &val : row) {
                     val = dis(gen);
                 }
             }
         }
     }
 
-    void xavier_initialize() {
+    void xavier_initialise() {
         std::random_device rd;
         std::mt19937 gen(rd());
         double limit = std::sqrt(6.0 / (height * width * depth));
         std::uniform_real_distribution<> dis(-limit, limit);
 
-        for (auto& channel : data) {
-            for (auto& row : channel) {
-                for (auto& val : row) {
+        for (auto &channel : data) {
+            for (auto &row : channel) {
+                for (auto &val : row) {
                     val = dis(gen);
                 }
             }
         }
     }
 
-    void zero_initialize() {
-        for (auto& channel : data) {
-            for (auto& row : channel) {
-                for (auto& val : row) {
+    void uniform_initialise() {
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_real_distribution<> dis(0, 1);
+
+        for (auto &channel : data) {
+            for (auto &row : channel) {
+                for (auto &val : row) {
+                    val = dis(gen);
+                }
+            }
+        }
+    }
+
+    void zero_initialise() {
+        for (auto &channel : data) {
+            for (auto &row : channel) {
+                for (auto &val : row) {
                     val = 0.0;
                 }
             }
@@ -394,22 +167,21 @@ class Tensor3D {
      * @param other The tensor to multiply with.
      * @return The resulting tensor after multiplication.
      */
-    Tensor3D operator*(const Tensor3D& other) const {
+    Tensor3D operator*(const Tensor3D &other) const {
         // check dimensions match for matrix multiplication at each depth
         if (width != other.height) {
-            throw std::invalid_argument(
-                "tensor dimensions don't match for multiplication: (" + 
-                std::to_string(height) + "x" + std::to_string(width) + "x" + std::to_string(depth) + ") * (" +
-                std::to_string(other.height) + "x" + std::to_string(other.width) + "x" + std::to_string(other.depth) + ")"
-            );
+            throw std::invalid_argument("tensor dimensions don't match for multiplication: (" + std::to_string(height) + "x" +
+                                        std::to_string(width) + "x" + std::to_string(depth) + ") * (" +
+                                        std::to_string(other.height) + "x" + std::to_string(other.width) + "x" +
+                                        std::to_string(other.depth) + ")");
         }
         if (depth != other.depth) {
             throw std::invalid_argument("tensor depths must match for multiplication");
         }
-        
+
         // result will have dimensions: (this.height x other.width x depth)
         Tensor3D result(depth, height, other.width);
-        
+
         // perform matrix multiplication for each depth slice
         for (size_t d = 0; d < depth; d++) {
             // cache-friendly loop order (k before j)
@@ -421,15 +193,15 @@ class Tensor3D {
                 }
             }
         }
-        
+
         return result;
     }
 
-    Tensor3D operator+(const Tensor3D& other) const {
+    Tensor3D operator+(const Tensor3D &other) const {
         if (height != other.height || width != other.width || depth != other.depth) {
             throw std::invalid_argument("tensor dimensions don't match for addition");
         }
-        
+
         Tensor3D result(depth, height, width);
         for (size_t d = 0; d < depth; d++) {
             for (size_t i = 0; i < height; i++) {
@@ -441,11 +213,11 @@ class Tensor3D {
         return result;
     }
 
-    Tensor3D operator-(const Tensor3D& other) const {
+    Tensor3D operator-(const Tensor3D &other) const {
         if (height != other.height || width != other.width || depth != other.depth) {
             throw std::invalid_argument("tensor dimensions don't match for subtraction");
         }
-        
+
         Tensor3D result(depth, height, width);
         for (size_t d = 0; d < depth; d++) {
             for (size_t i = 0; i < height; i++) {
@@ -469,11 +241,11 @@ class Tensor3D {
         return result;
     }
 
-    Tensor3D hadamard(const Tensor3D& other) const {
+    Tensor3D hadamard(const Tensor3D &other) const {
         if (height != other.height || width != other.width || depth != other.depth) {
             throw std::invalid_argument("tensor dimensions don't match for Hadamard product");
         }
-        
+
         Tensor3D result(depth, height, width);
         for (size_t d = 0; d < depth; d++) {
             for (size_t i = 0; i < height; i++) {
@@ -522,15 +294,17 @@ class Tensor3D {
         return result;
     }
 
+    // todo add a reshape method for conv layer -> nn layer translation
+
     // softmax across width dimension for back-compatibility with old matrix class
     Tensor3D softmax() const {
         Tensor3D result(depth, height, width);
-        
+
         for (size_t d = 0; d < depth; d++) {
-            for (size_t w = 0; w < width; w++) {  // equivalent to "columns" in Matrix
+            for (size_t w = 0; w < width; w++) {  // equivalent to "columns" in matrix
                 // find max
                 double max_val = -std::numeric_limits<double>::infinity();
-                for (size_t h = 0; h < height; h++) {  // equivalent to "rows" in Matrix
+                for (size_t h = 0; h < height; h++) {  // equivalent to "rows" in matrix
                     max_val = std::max(max_val, data[d][h][w]);
                 }
 
@@ -551,13 +325,19 @@ class Tensor3D {
     }
 };
 
+class Layer {
+   public:
+    virtual ~Layer() = default;
 
+    // pure virtual class - requires implementation in derived objects.
+    virtual Tensor3D feedforward(const Tensor3D &input) = 0;
 
-// layer class representing a single dense (fully connected) layer in the neural network
+};
+
 class DenseLayer {
    public:
-    Matrix weights;
-    Matrix bias;
+    Tensor3D weights;
+    Tensor3D bias;
     std::string activation_function;
 
     /**
@@ -569,7 +349,7 @@ class DenseLayer {
     DenseLayer(size_t input_size, size_t output_size, std::string activation_function = "sigmoid")
         : weights(output_size, input_size), bias(output_size, 1), activation_function(activation_function) {
         if (activation_function == "sigmoid") {
-            weights.xavier_initialize();
+            weights.xavier_initialise();
         } else if (activation_function == "relu") {
             weights.he_initialise();
         } else {
@@ -582,9 +362,9 @@ class DenseLayer {
      * @param input The input matrix.
      * @return The output matrix after applying the layer's transformation.
      */
-    Matrix feedforward(const Matrix &input) {
-        Matrix z = weights * input + bias;
-        Matrix output(z.rows, z.cols);
+    Tensor3D feedforward(const Tensor3D &input) {
+        Tensor3D z = weights * input + bias;
+        Tensor3D output(z.height, z.width);
         if (activation_function == "sigmoid") {
             output = z.apply(sigmoid);
         } else if (activation_function == "relu") {
@@ -603,9 +383,9 @@ class DenseLayer {
      * @param input The input matrix.
      * @return A vector containing the output matrix and pre-activation matrix.
      */
-    std::vector<Matrix> feedforward_backprop(const Matrix &input) const {
-        Matrix z = weights * input + bias;
-        Matrix output(z.rows, z.cols);
+    std::vector<Tensor3D> feedforward_backprop(const Tensor3D &input) const {
+        Tensor3D z = weights * input + bias;
+        Tensor3D output(z.height, z.width);
         if (activation_function == "sigmoid") {
             output = z.apply(sigmoid);
         } else if (activation_function == "relu") {
@@ -631,16 +411,12 @@ class ConvolutionLayer {
     std::string mode;
 
     ConvolutionLayer(int channels_in, int out_channels, int kernel_size, int stride = 1, std::string mode = "same")
-        : channels_in(channels_in),
-          out_channels(out_channels),
-          kernel_size(kernel_size),
-          stride(stride),
-          mode(mode) {
+        : channels_in(channels_in), out_channels(out_channels), kernel_size(kernel_size), stride(stride), mode(mode) {
         // creates a list of kernel tensors - one for each output channel
         weights.reserve(out_channels);
         for (int i = 0; i < out_channels; i++) {
             weights.emplace_back(channels_in, kernel_size, kernel_size);
-            weights.back().he_initialize();
+            weights.back().he_initialise();
         }
 
         // creates a list of bias values - one for each output channel
@@ -686,26 +462,26 @@ class Loss {
     virtual ~Loss() = default;
 
     // Compute the loss value
-    virtual double compute(const Matrix &predicted, const Matrix &target) const = 0;
+    virtual double compute(const Tensor3D &predicted, const Tensor3D &target) const = 0;
 
     // Compute the derivative of the loss with respect to the predicted values
-    virtual Matrix derivative(const Matrix &predicted, const Matrix &target) const = 0;
+    virtual Tensor3D derivative(const Tensor3D &predicted, const Tensor3D &target) const = 0;
 };
 
 class CrossEntropyLoss : public Loss {
    public:
-    double compute(const Matrix &predicted, const Matrix &target) const override {
+    double compute(const Tensor3D &predicted, const Tensor3D &target) const override {
         double loss = 0.0;
-        for (size_t i = 0; i < predicted.rows; ++i) {
-            for (size_t j = 0; j < predicted.cols; ++j) {
+        for (size_t i = 0; i < predicted.height; ++i) {
+            for (size_t j = 0; j < predicted.width; ++j) {
                 // Add small epsilon to avoid log(0)
-                loss -= target.data[i][j] * std::log(predicted.data[i][j] + 1e-10);
+                loss -= target.data[0][i][j] * std::log(predicted.data[0][i][j] + 1e-10);
             }
         }
-        return loss / predicted.cols;  // Average over batch
+        return loss / predicted.width;  // Average over batch
     }
 
-    Matrix derivative(const Matrix &predicted, const Matrix &target) const override {
+    Tensor3D derivative(const Tensor3D &predicted, const Tensor3D &target) const override {
         // For cross entropy with softmax, the derivative simplifies to (predicted - target)
         return predicted - target;
     }
@@ -713,19 +489,19 @@ class CrossEntropyLoss : public Loss {
 
 class MSELoss : public Loss {
    public:
-    double compute(const Matrix &predicted, const Matrix &target) const override {
+    double compute(const Tensor3D &predicted, const Tensor3D &target) const override {
         double loss = 0.0;
-        for (size_t i = 0; i < predicted.rows; ++i) {
-            for (size_t j = 0; j < predicted.cols; ++j) {
-                double diff = predicted.data[i][j] - target.data[i][j];
+        for (size_t i = 0; i < predicted.height; ++i) {
+            for (size_t j = 0; j < predicted.width; ++j) {
+                double diff = predicted.data[0][i][j] - target.data[0][i][j];
                 loss += diff * diff;
             }
         }
-        return loss / (2.0 * predicted.cols);  // Average over batch and divide by 2
+        return loss / (2.0 * predicted.width);  // Average over batch and divide by 2
     }
 
-    Matrix derivative(const Matrix &predicted, const Matrix &target) const override {
-        return (predicted - target) * (1.0 / predicted.cols);
+    Tensor3D derivative(const Tensor3D &predicted, const Tensor3D &target) const override {
+        return (predicted - target) * (1.0 / predicted.width);
     }
 };
 
@@ -741,7 +517,7 @@ class Optimiser {
      * @param gradients The gradients used for updating the layers.
      */
     virtual void compute_and_apply_updates(std::vector<DenseLayer> &layers,
-                                           const std::vector<std::vector<Matrix>> &gradients) = 0;
+                                           const std::vector<std::vector<Tensor3D>> &gradients) = 0;
 
     /**
      * @brief Virtual destructor for the Optimiser class.
@@ -749,9 +525,9 @@ class Optimiser {
     virtual ~Optimiser() = default;
 
     struct GradientResult {
-        std::vector<std::vector<Matrix>> gradients;  // list of layers, each layer has a list of weight and bias gradient matrices
-        Matrix input_layer_gradient;  // gradient of the input layer - for more general use as parts of bigger architectures
-        Matrix output;                // output of the network
+        std::vector<std::vector<Tensor3D>> gradients;  // list of layers, each layer has a list of weight and bias gradient matrices
+        Tensor3D input_layer_gradient;  // gradient of the input layer - for more general use as parts of bigger architectures
+        Tensor3D output;                // output of the network
     };
 
     /**
@@ -761,11 +537,11 @@ class Optimiser {
      * @param target The target matrix.
      * @return A GradientResult struct containing gradients and the output of the network.
      */
-    virtual GradientResult calculate_gradient(const std::vector<DenseLayer> &layers, const Matrix &input, const Matrix &target,
+    virtual GradientResult calculate_gradient(const std::vector<DenseLayer> &layers, const Tensor3D &input, const Tensor3D &target,
                                               const Loss &loss) {
         // forward pass
-        std::vector<Matrix> activations = {input};
-        std::vector<Matrix> preactivations = {input};
+        std::vector<Tensor3D> activations = {input};
+        std::vector<Tensor3D> preactivations = {input};
 
         for (const auto &layer : layers) {
             auto results = layer.feedforward_backprop(activations.back());
@@ -775,11 +551,11 @@ class Optimiser {
 
         // backward pass
         int num_layers = layers.size();
-        std::vector<Matrix> deltas;
+        std::vector<Tensor3D> deltas;
         deltas.reserve(num_layers);
 
         // output layer error (δ^L = ∇_a C ⊙ σ'(z^L))
-        Matrix output_delta = loss.derivative(activations.back(), target);
+        Tensor3D output_delta = loss.derivative(activations.back(), target);
         if (layers.back().activation_function == "sigmoid") {
             output_delta = output_delta.hadamard(preactivations.back().apply(sigmoid_derivative));
         } else if (layers.back().activation_function == "relu") {
@@ -793,7 +569,7 @@ class Optimiser {
 
         // hidden layer errors (δ^l = ((w^(l+1))^T δ^(l+1)) ⊙ σ'(z^l))
         for (int l = num_layers - 2; l >= 0; --l) {
-            Matrix delta = (layers[l + 1].weights.transpose() * deltas.back());
+            Tensor3D delta = (layers[l + 1].weights.transpose() * deltas.back());
             if (layers[l].activation_function == "sigmoid") {
                 delta = delta.hadamard(preactivations[l + 1].apply(sigmoid_derivative));
             } else if (layers[l].activation_function == "relu") {
@@ -810,9 +586,9 @@ class Optimiser {
         std::reverse(deltas.begin(), deltas.end());
 
         // calculate gradients
-        std::vector<std::vector<Matrix>> gradients;
+        std::vector<std::vector<Tensor3D>> gradients;
         for (int l = 0; l < num_layers; ++l) {
-            Matrix weight_gradient = deltas[l] * activations[l].transpose();
+            Tensor3D weight_gradient = deltas[l] * activations[l].transpose();
             gradients.push_back({weight_gradient, deltas[l]});
         }
 
@@ -825,14 +601,14 @@ class Optimiser {
      * @param batch_gradients A vector of gradients from multiple examples.
      * @return The averaged gradients.
      */
-    std::vector<std::vector<Matrix>> average_gradients(const std::vector<std::vector<std::vector<Matrix>>> &batch_gradients) {
-        std::vector<std::vector<Matrix>> avg_gradients;
+    std::vector<std::vector<Tensor3D>> average_gradients(const std::vector<std::vector<std::vector<Tensor3D>>> &batch_gradients) {
+        std::vector<std::vector<Tensor3D>> avg_gradients;
         size_t num_layers = batch_gradients[0].size();
         size_t batch_size = batch_gradients.size();
 
         for (size_t l = 0; l < num_layers; ++l) {
-            Matrix avg_weight_grad(batch_gradients[0][l][0].rows, batch_gradients[0][l][0].cols);
-            Matrix avg_bias_grad(batch_gradients[0][l][1].rows, batch_gradients[0][l][1].cols);
+            Tensor3D avg_weight_grad(batch_gradients[0][l][0].height, batch_gradients[0][l][0].width);
+            Tensor3D avg_bias_grad(batch_gradients[0][l][1].height, batch_gradients[0][l][1].width);
 
             for (const auto &example_gradients : batch_gradients) {
                 avg_weight_grad = avg_weight_grad + example_gradients[l][0];
@@ -852,7 +628,7 @@ class Optimiser {
 class SGDOptimiser : public Optimiser {
    private:
     double learning_rate;
-    std::vector<std::vector<Matrix>> velocity;
+    std::vector<std::vector<Tensor3D>> velocity;
 
    public:
     /**
@@ -862,13 +638,13 @@ class SGDOptimiser : public Optimiser {
     SGDOptimiser(double lr = 0.1) : learning_rate(lr) {}
 
     /**
-     * @brief Initializes the velocity vectors for SGD optimization.
+     * @brief initialises the velocity vectors for SGD optimization.
      * @param layers The layers of the neural network.
      */
-    void initialize_velocity(const std::vector<DenseLayer> &layers) {
+    void initialise_velocity(const std::vector<DenseLayer> &layers) {
         velocity.clear();
         for (const auto &layer : layers) {
-            velocity.push_back({Matrix(layer.weights.rows, layer.weights.cols), Matrix(layer.bias.rows, layer.bias.cols)});
+            velocity.push_back({Tensor3D(layer.weights.height, layer.weights.width), Tensor3D(layer.bias.height, layer.bias.width)});
         }
     }
 
@@ -877,9 +653,9 @@ class SGDOptimiser : public Optimiser {
      * @param layers The layers of the neural network to update.
      * @param gradients The gradients used for updating the layers.
      */
-    void compute_and_apply_updates(std::vector<DenseLayer> &layers, const std::vector<std::vector<Matrix>> &gradients) override {
+    void compute_and_apply_updates(std::vector<DenseLayer> &layers, const std::vector<std::vector<Tensor3D>> &gradients) override {
         if (velocity.empty()) {
-            initialize_velocity(layers);
+            initialise_velocity(layers);
         }
 
         // compute and apply updates
@@ -899,7 +675,7 @@ class SGDMomentumOptimiser : public Optimiser {
    private:
     double learning_rate;
     double momentum;
-    std::vector<std::vector<Matrix>> velocity;
+    std::vector<std::vector<Tensor3D>> velocity;
 
    public:
     /**
@@ -910,13 +686,13 @@ class SGDMomentumOptimiser : public Optimiser {
     SGDMomentumOptimiser(double lr = 0.1, double mom = 0.9) : learning_rate(lr), momentum(mom) {}
 
     /**
-     * @brief Initializes the velocity vectors for SGD with Momentum optimization.
+     * @brief initialises the velocity vectors for SGD with Momentum optimization.
      * @param layers The layers of the neural network.
      */
-    void initialize_velocity(const std::vector<DenseLayer> &layers) {
+    void initialise_velocity(const std::vector<DenseLayer> &layers) {
         velocity.clear();
         for (const auto &layer : layers) {
-            velocity.push_back({Matrix(layer.weights.rows, layer.weights.cols), Matrix(layer.bias.rows, layer.bias.cols)});
+            velocity.push_back({Tensor3D(layer.weights.height, layer.weights.width), Tensor3D(layer.bias.height, layer.bias.width)});
         }
     }
 
@@ -925,9 +701,9 @@ class SGDMomentumOptimiser : public Optimiser {
      * @param layers The layers of the neural network to update.
      * @param gradients The gradients used for updating the layers.
      */
-    void compute_and_apply_updates(std::vector<DenseLayer> &layers, const std::vector<std::vector<Matrix>> &gradients) override {
+    void compute_and_apply_updates(std::vector<DenseLayer> &layers, const std::vector<std::vector<Tensor3D>> &gradients) override {
         if (velocity.empty()) {
-            initialize_velocity(layers);
+            initialise_velocity(layers);
         }
 
         // compute updates
@@ -947,7 +723,7 @@ class NesterovMomentumOptimiser : public Optimiser {
    private:
     double learning_rate;
     double momentum;
-    std::vector<std::vector<Matrix>> velocity;
+    std::vector<std::vector<Tensor3D>> velocity;
 
    public:
     /**
@@ -958,13 +734,13 @@ class NesterovMomentumOptimiser : public Optimiser {
     NesterovMomentumOptimiser(double lr = 0.1, double mom = 0.9) : learning_rate(lr), momentum(mom) {}
 
     /**
-     * @brief Initializes the velocity vectors for Nesterov Momentum optimization.
+     * @brief initialises the velocity vectors for Nesterov Momentum optimization.
      * @param layers The layers of the neural network.
      */
-    void initialize_velocity(const std::vector<DenseLayer> &layers) {
+    void initialise_velocity(const std::vector<DenseLayer> &layers) {
         velocity.clear();
         for (const auto &layer : layers) {
-            velocity.push_back({Matrix(layer.weights.rows, layer.weights.cols), Matrix(layer.bias.rows, layer.bias.cols)});
+            velocity.push_back({Tensor3D(layer.weights.height, layer.weights.width), Tensor3D(layer.bias.height, layer.bias.width)});
         }
     }
 
@@ -975,12 +751,12 @@ class NesterovMomentumOptimiser : public Optimiser {
      * @param target The target matrix.
      * @return A GradientResult struct containing gradients and the output of the network.
      */
-    GradientResult calculate_gradient(const std::vector<DenseLayer> &layers, const Matrix &input, const Matrix &target,
+    GradientResult calculate_gradient(const std::vector<DenseLayer> &layers, const Tensor3D &input, const Tensor3D &target,
                                       const Loss &loss) override {
         // get lookahead position
         std::vector<DenseLayer> tmp_layers = layers;
         if (velocity.empty()) {
-            initialize_velocity(tmp_layers);
+            initialise_velocity(tmp_layers);
         } else {
             for (int l = 0; l < tmp_layers.size(); l++) {
                 tmp_layers[l].weights = tmp_layers[l].weights + (velocity[l][0] * momentum);
@@ -1000,9 +776,9 @@ class NesterovMomentumOptimiser : public Optimiser {
      * @param layers The layers of the neural network to update.
      * @param gradients The gradients used for updating the layers.
      */
-    void compute_and_apply_updates(std::vector<DenseLayer> &layers, const std::vector<std::vector<Matrix>> &gradients) override {
+    void compute_and_apply_updates(std::vector<DenseLayer> &layers, const std::vector<std::vector<Tensor3D>> &gradients) override {
         if (velocity.empty()) {
-            initialize_velocity(layers);
+            initialise_velocity(layers);
         }
 
         // compute and apply updates
@@ -1025,8 +801,8 @@ class AdamOptimiser : public Optimiser {
     double beta2;
     double epsilon;
     int t;                               // timestep
-    std::vector<std::vector<Matrix>> m;  // first moment
-    std::vector<std::vector<Matrix>> v;  // second moment
+    std::vector<std::vector<Tensor3D>> m;  // first moment
+    std::vector<std::vector<Tensor3D>> v;  // second moment
 
    public:
     /**
@@ -1040,17 +816,17 @@ class AdamOptimiser : public Optimiser {
         : learning_rate(lr), beta1(b1), beta2(b2), epsilon(eps), t(0) {}
 
     /**
-     * @brief Initializes the first and second moment vectors for Adam optimization.
+     * @brief initialises the first and second moment vectors for Adam optimization.
      * @param layers The layers of the neural network.
      */
-    void initialize_moments(const std::vector<DenseLayer> &layers) {
+    void initialise_moments(const std::vector<DenseLayer> &layers) {
         m.clear();
         v.clear();
         m.reserve(layers.size());
         v.reserve(layers.size());
         for (const auto &layer : layers) {
-            m.push_back({Matrix(layer.weights.rows, layer.weights.cols), Matrix(layer.bias.rows, layer.bias.cols)});
-            v.push_back({Matrix(layer.weights.rows, layer.weights.cols), Matrix(layer.bias.rows, layer.bias.cols)});
+            m.push_back({Tensor3D(layer.weights.height, layer.weights.width), Tensor3D(layer.bias.height, layer.bias.width)});
+            v.push_back({Tensor3D(layer.weights.height, layer.weights.width), Tensor3D(layer.bias.height, layer.bias.width)});
         }
     }
 
@@ -1059,9 +835,9 @@ class AdamOptimiser : public Optimiser {
      * @param layers The layers of the neural network to update.
      * @param gradients The gradients used for updating the layers.
      */
-    void compute_and_apply_updates(std::vector<DenseLayer> &layers, const std::vector<std::vector<Matrix>> &gradients) override {
+    void compute_and_apply_updates(std::vector<DenseLayer> &layers, const std::vector<std::vector<Tensor3D>> &gradients) override {
         if (m.empty() or v.empty()) {
-            initialize_moments(layers);
+            initialise_moments(layers);
         }
 
         t++;  // increment timestep
@@ -1075,13 +851,13 @@ class AdamOptimiser : public Optimiser {
                 v[l][i] = v[l][i] * beta2 + gradients[l][i].hadamard(gradients[l][i]) * (1.0 - beta2);
 
                 // compute bias-corrected first moment estimate
-                Matrix m_hat = m[l][i] * (1.0 / (1.0 - std::pow(beta1, t)));
+                Tensor3D m_hat = m[l][i] * (1.0 / (1.0 - std::pow(beta1, t)));
 
                 // compute bias-corrected second raw moment estimate
-                Matrix v_hat = v[l][i] * (1.0 / (1.0 - std::pow(beta2, t)));
+                Tensor3D v_hat = v[l][i] * (1.0 / (1.0 - std::pow(beta2, t)));
 
                 // compute the update
-                Matrix update = m_hat.hadamard(v_hat.apply([this](double x) { return 1.0 / (std::sqrt(x) + epsilon); }));
+                Tensor3D update = m_hat.hadamard(v_hat.apply([this](double x) { return 1.0 / (std::sqrt(x) + epsilon); }));
 
                 // apply the update
                 if (i == 0) {
@@ -1102,8 +878,8 @@ class AdamWOptimiser : public Optimiser {
     double epsilon;
     double weight_decay;
     int t;                               // timestep
-    std::vector<std::vector<Matrix>> m;  // first moment
-    std::vector<std::vector<Matrix>> v;  // second moment
+    std::vector<std::vector<Tensor3D>> m;  // first moment
+    std::vector<std::vector<Tensor3D>> v;  // second moment
 
    public:
     /**
@@ -1118,17 +894,17 @@ class AdamWOptimiser : public Optimiser {
         : learning_rate(lr), beta1(b1), beta2(b2), epsilon(eps), weight_decay(wd), t(0) {}
 
     /**
-     * @brief Initializes the first and second moment vectors for AdamW optimization.
+     * @brief initialises the first and second moment vectors for AdamW optimization.
      * @param layers The layers of the neural network.
      */
-    void initialize_moments(const std::vector<DenseLayer> &layers) {
+    void initialise_moments(const std::vector<DenseLayer> &layers) {
         m.clear();
         v.clear();
         m.reserve(layers.size());
         v.reserve(layers.size());
         for (const auto &layer : layers) {
-            m.push_back({Matrix(layer.weights.rows, layer.weights.cols), Matrix(layer.bias.rows, layer.bias.cols)});
-            v.push_back({Matrix(layer.weights.rows, layer.weights.cols), Matrix(layer.bias.rows, layer.bias.cols)});
+            m.push_back({Tensor3D(layer.weights.height, layer.weights.width), Tensor3D(layer.bias.height, layer.bias.width)});
+            v.push_back({Tensor3D(layer.weights.height, layer.weights.width), Tensor3D(layer.bias.height, layer.bias.width)});
         }
     }
 
@@ -1137,9 +913,9 @@ class AdamWOptimiser : public Optimiser {
      * @param layers The layers of the neural network to update.
      * @param gradients The gradients used for updating the layers.
      */
-    void compute_and_apply_updates(std::vector<DenseLayer> &layers, const std::vector<std::vector<Matrix>> &gradients) override {
+    void compute_and_apply_updates(std::vector<DenseLayer> &layers, const std::vector<std::vector<Tensor3D>> &gradients) override {
         if (m.empty() || v.empty()) {
-            initialize_moments(layers);
+            initialise_moments(layers);
         }
 
         t++;  // increment timestep
@@ -1153,13 +929,13 @@ class AdamWOptimiser : public Optimiser {
                 v[l][i] = v[l][i] * beta2 + gradients[l][i].hadamard(gradients[l][i]) * (1.0 - beta2);
 
                 // compute bias-corrected first moment estimate
-                Matrix m_hat = m[l][i] * (1.0 / (1.0 - std::pow(beta1, t)));
+                Tensor3D m_hat = m[l][i] * (1.0 / (1.0 - std::pow(beta1, t)));
 
                 // compute bias-corrected second raw moment estimate
-                Matrix v_hat = v[l][i] * (1.0 / (1.0 - std::pow(beta2, t)));
+                Tensor3D v_hat = v[l][i] * (1.0 / (1.0 - std::pow(beta2, t)));
 
                 // compute the Adam update
-                Matrix update = m_hat.hadamard(v_hat.apply([this](double x) { return 1.0 / (std::sqrt(x) + epsilon); }));
+                Tensor3D update = m_hat.hadamard(v_hat.apply([this](double x) { return 1.0 / (std::sqrt(x) + epsilon); }));
 
                 // apply the update
                 if (i == 0) {  // for weights
@@ -1241,8 +1017,8 @@ class NeuralNetwork {
      * @param input The input matrix.
      * @return The output matrix after passing through all layers.
      */
-    Matrix feedforward(const Matrix &input) {
-        Matrix current = input;
+    Tensor3D feedforward(const Tensor3D &input) {
+        Tensor3D current = input;
         for (auto &layer : layers) {
             current = layer.feedforward(current);
         }
@@ -1262,17 +1038,17 @@ class NeuralNetwork {
     void set_loss(std::unique_ptr<Loss> new_loss) { loss = std::move(new_loss); }
 
     // train the neural network using optimiser set
-    void train_mt_optimiser(const std::vector<std::vector<Matrix>> &training_data,
-                            const std::vector<std::vector<Matrix>> &eval_data, int epochs, int batch_size) {
+    void train_mt_optimiser(const std::vector<std::vector<Tensor3D>> &training_data,
+                            const std::vector<std::vector<Tensor3D>> &eval_data, int epochs, int batch_size) {
         unsigned int num_threads = std::thread::hardware_concurrency();
         std::vector<std::thread> threads(num_threads);
-        std::vector<std::vector<std::vector<std::vector<Matrix>>>> thread_gradients(num_threads);
+        std::vector<std::vector<std::vector<std::vector<Tensor3D>>>> thread_gradients(num_threads);
         std::mutex gradients_mutex;
         int counter = 0;
 
         // used for tracking loss of each batch
-        std::vector<Matrix> batch_outputs;
-        std::vector<Matrix> batch_targets;
+        std::vector<Tensor3D> batch_outputs;
+        std::vector<Tensor3D> batch_targets;
 
         // create a vector of indices
         std::vector<size_t> indices(training_data.size());
@@ -1308,12 +1084,12 @@ class NeuralNetwork {
                         size_t start = t * current_batch_size / num_threads;
                         size_t end = (t + 1) * current_batch_size / num_threads;
 
-                        std::vector<std::vector<std::vector<Matrix>>> local_gradients;
+                        std::vector<std::vector<std::vector<Tensor3D>>> local_gradients;
                         local_gradients.reserve(end - start);
 
                         // Local vectors to collect outputs and targets
-                        std::vector<Matrix> local_outputs;
-                        std::vector<Matrix> local_targets;
+                        std::vector<Tensor3D> local_outputs;
+                        std::vector<Tensor3D> local_targets;
                         local_outputs.reserve(end - start);
                         local_targets.reserve(end - start);
 
@@ -1321,8 +1097,8 @@ class NeuralNetwork {
                             size_t index = indices[batch_start + i];
                             if (index < training_data.size()) {
                                 const auto &data_pair = training_data[index];
-                                const Matrix &input = data_pair[0];
-                                const Matrix &target = data_pair[1];
+                                const Tensor3D &input = data_pair[0];
+                                const Tensor3D &target = data_pair[1];
                                 auto [gradient, input_layer_gradient, output] =
                                     optimiser->calculate_gradient(layers, input, target, *loss);
                                 local_gradients.push_back(gradient);
@@ -1347,7 +1123,7 @@ class NeuralNetwork {
                 }
 
                 // flatten gradients
-                std::vector<std::vector<std::vector<Matrix>>> batch_gradients;
+                std::vector<std::vector<std::vector<Tensor3D>>> batch_gradients;
                 for (const auto &thread_grad : thread_gradients) {
                     batch_gradients.insert(batch_gradients.end(), thread_grad.begin(), thread_grad.end());
                 }
@@ -1370,13 +1146,13 @@ class NeuralNetwork {
      * @param epochs The number of training epochs.
      * @param batch_size The size of each batch for training.
      */
-    size_t get_index_of_max_element_in_nx1_matrix(const Matrix &matrix) const {
+    size_t get_index_of_max_element_in_nx1_matrix(const Tensor3D &matrix) const {
         size_t index = 0;
-        double max_value = matrix.data[0][0];
-        for (size_t i = 1; i < matrix.rows; ++i) {
-            if (matrix.data[i][0] > max_value) {
+        double max_value = matrix.data[0][0][0];
+        for (size_t i = 1; i < matrix.height; ++i) {
+            if (matrix.data[0][i][0] > max_value) {
                 index = i;
-                max_value = matrix.data[i][0];
+                max_value = matrix.data[0][i][0];
             }
         }
         return index;
@@ -1387,7 +1163,7 @@ class NeuralNetwork {
      * @param test_data The test dataset.
      * @return An EvaluationMetrics struct containing accuracy, precision, recall, and F1 score.
      */
-    EvaluationMetrics evaluate_nn(const std::vector<std::vector<Matrix>> &test_data) {
+    EvaluationMetrics evaluate_nn(const std::vector<std::vector<Tensor3D>> &test_data) {
         if (test_data.empty() or test_data[0].size() != 2) {
             throw std::invalid_argument(
                 "Test data must be a non-empty vector of vectors, each containing an input and a target matrix.");
@@ -1399,10 +1175,10 @@ class NeuralNetwork {
 
         double total_loss = 0.0;
         for (const auto &example : test_data) {
-            const Matrix &input = example[0];
-            const Matrix &target = example[1];
+            const Tensor3D &input = example[0];
+            const Tensor3D &target = example[1];
 
-            Matrix output = this->feedforward(input);
+            Tensor3D output = this->feedforward(input);
             total_loss += loss->compute(output, target);
 
             // assuming output and target are nx1 matrices
@@ -1451,8 +1227,8 @@ class NeuralNetwork {
         // first, write all layer information
         for (size_t i = 0; i < layers.size(); ++i) {
             const auto &layer = layers[i];
-            uint32_t input_size = static_cast<uint32_t>(layer.weights.cols);
-            uint32_t output_size = static_cast<uint32_t>(layer.weights.rows);
+            uint32_t input_size = static_cast<uint32_t>(layer.weights.width);
+            uint32_t output_size = static_cast<uint32_t>(layer.weights.height);
 
             file.write(reinterpret_cast<const char *>(&input_size), sizeof(input_size));
             file.write(reinterpret_cast<const char *>(&output_size), sizeof(output_size));
@@ -1481,7 +1257,7 @@ class NeuralNetwork {
     /**
      * @brief Loads a neural network model from a file.
      * @param filename The name of the file to load the model from.
-     * @return A NeuralNetwork object initialized with the loaded model.
+     * @return A NeuralNetwork object initialised with the loaded model.
      */
     static NeuralNetwork load_model(const std::string &filename) {
         std::ifstream file(filename, std::ios::binary);
@@ -1541,13 +1317,11 @@ class NeuralNetwork {
 };
 
 // runner code
-int main() { 
+int main() {
     int input_channels = 2;
     int output_channels = 5;
     int kernel_size = 3;
     ConvolutionLayer convlayer(input_channels, output_channels, kernel_size);
     Tensor3D kernel(input_channels, kernel_size, kernel_size);
-
     Tensor3D result = convlayer.feedforward(kernel);
-
 }
