@@ -299,24 +299,10 @@ class Tensor3D {
     // default constructor
     Tensor3D() : height(0), width(0), depth(0) {}
 
-    Tensor3D(size_t width, size_t height, size_t depth) : height(height), width(width), depth(depth) {
+    Tensor3D(size_t depth, size_t height, size_t width) : height(height), width(width), depth(depth) {
         data.resize(depth, std::vector<std::vector<double>>(height, std::vector<double>(width, 0.0)));
     }
 
-    void he_initialize() {
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        double std_dev = std::sqrt(2.0 / (height * width * depth));
-        std::normal_distribution<> dis(0, std_dev);
-
-        for (auto& channel : data) {
-            for (auto& row : channel) {
-                for (auto& val : row) {
-                    val = dis(gen);
-                }
-            }
-        }
-    }
     
     // compute dot product with a kernel centered at specific position - the argument must be the kernel
     double dot_with_kernel_at_postion(const Tensor3D &kernel, size_t start_x, size_t start_y) const {
@@ -346,18 +332,226 @@ class Tensor3D {
 
     // return a new tensor with the width and height axis padded by 'amount'.
     static Tensor3D pad(const Tensor3D &input, int amount = 1) {
-        Tensor3D output(input.width + amount, input.height + amount, input.depth);
+        Tensor3D output(input.depth, input.height + amount, input.width + amount);
         for (int depth_index = 0; depth_index < output.depth; ++depth_index) {
             for (int height_index = amount; height_index < output.height - amount; ++height_index) {
                 for (int width_index = amount; width_index < output.width - amount; ++width_index) {
                     output.data[depth_index][height_index][width_index] =
                         input.data[depth_index][height_index - amount][width_index - amount];
                 }
+
             }
         }
         return output;
     }
+
+
+    // initialization methods
+    void he_initialize() {
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        double std_dev = std::sqrt(2.0 / (height * width * depth));
+        std::normal_distribution<> dis(0, std_dev);
+
+        for (auto& channel : data) {
+            for (auto& row : channel) {
+                for (auto& val : row) {
+                    val = dis(gen);
+                }
+            }
+        }
+    }
+
+    void xavier_initialize() {
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        double limit = std::sqrt(6.0 / (height * width * depth));
+        std::uniform_real_distribution<> dis(-limit, limit);
+
+        for (auto& channel : data) {
+            for (auto& row : channel) {
+                for (auto& val : row) {
+                    val = dis(gen);
+                }
+            }
+        }
+    }
+
+    void zero_initialize() {
+        for (auto& channel : data) {
+            for (auto& row : channel) {
+                for (auto& val : row) {
+                    val = 0.0;
+                }
+            }
+        }
+    }
+
+    // operators
+
+    /**
+     * @brief Overloads the multiplication operator for matrix multiplication on each depth slice.
+     * @param other The tensor to multiply with.
+     * @return The resulting tensor after multiplication.
+     */
+    Tensor3D operator*(const Tensor3D& other) const {
+        // check dimensions match for matrix multiplication at each depth
+        if (width != other.height) {
+            throw std::invalid_argument(
+                "tensor dimensions don't match for multiplication: (" + 
+                std::to_string(height) + "x" + std::to_string(width) + "x" + std::to_string(depth) + ") * (" +
+                std::to_string(other.height) + "x" + std::to_string(other.width) + "x" + std::to_string(other.depth) + ")"
+            );
+        }
+        if (depth != other.depth) {
+            throw std::invalid_argument("tensor depths must match for multiplication");
+        }
+        
+        // result will have dimensions: (this.height x other.width x depth)
+        Tensor3D result(depth, height, other.width);
+        
+        // perform matrix multiplication for each depth slice
+        for (size_t d = 0; d < depth; d++) {
+            // cache-friendly loop order (k before j)
+            for (size_t i = 0; i < height; i++) {
+                for (size_t k = 0; k < width; k++) {
+                    for (size_t j = 0; j < other.width; j++) {
+                        result.data[d][i][j] += data[d][i][k] * other.data[d][k][j];
+                    }
+                }
+            }
+        }
+        
+        return result;
+    }
+
+    Tensor3D operator+(const Tensor3D& other) const {
+        if (height != other.height || width != other.width || depth != other.depth) {
+            throw std::invalid_argument("tensor dimensions don't match for addition");
+        }
+        
+        Tensor3D result(depth, height, width);
+        for (size_t d = 0; d < depth; d++) {
+            for (size_t i = 0; i < height; i++) {
+                for (size_t j = 0; j < width; j++) {
+                    result.data[d][i][j] = data[d][i][j] + other.data[d][i][j];
+                }
+            }
+        }
+        return result;
+    }
+
+    Tensor3D operator-(const Tensor3D& other) const {
+        if (height != other.height || width != other.width || depth != other.depth) {
+            throw std::invalid_argument("tensor dimensions don't match for subtraction");
+        }
+        
+        Tensor3D result(depth, height, width);
+        for (size_t d = 0; d < depth; d++) {
+            for (size_t i = 0; i < height; i++) {
+                for (size_t j = 0; j < width; j++) {
+                    result.data[d][i][j] = data[d][i][j] - other.data[d][i][j];
+                }
+            }
+        }
+        return result;
+    }
+
+    Tensor3D operator*(double scalar) const {
+        Tensor3D result(depth, height, width);
+        for (size_t d = 0; d < depth; d++) {
+            for (size_t i = 0; i < height; i++) {
+                for (size_t j = 0; j < width; j++) {
+                    result.data[d][i][j] = data[d][i][j] * scalar;
+                }
+            }
+        }
+        return result;
+    }
+
+    Tensor3D hadamard(const Tensor3D& other) const {
+        if (height != other.height || width != other.width || depth != other.depth) {
+            throw std::invalid_argument("tensor dimensions don't match for Hadamard product");
+        }
+        
+        Tensor3D result(depth, height, width);
+        for (size_t d = 0; d < depth; d++) {
+            for (size_t i = 0; i < height; i++) {
+                for (size_t j = 0; j < width; j++) {
+                    result.data[d][i][j] = data[d][i][j] * other.data[d][i][j];
+                }
+            }
+        }
+        return result;
+    }
+
+    Tensor3D apply(double (*func)(double)) const {
+        Tensor3D result(depth, height, width);
+        for (size_t d = 0; d < depth; d++) {
+            for (size_t i = 0; i < height; i++) {
+                for (size_t j = 0; j < width; j++) {
+                    result.data[d][i][j] = func(data[d][i][j]);
+                }
+            }
+        }
+        return result;
+    }
+
+    template <typename Func>
+    Tensor3D apply(Func func) const {
+        Tensor3D result(depth, height, width);
+        for (size_t d = 0; d < depth; d++) {
+            for (size_t i = 0; i < height; i++) {
+                for (size_t j = 0; j < width; j++) {
+                    result.data[d][i][j] = func(data[d][i][j]);
+                }
+            }
+        }
+        return result;
+    }
+
+    Tensor3D transpose() const {
+        Tensor3D result(depth, height, width);
+        for (size_t d = 0; d < depth; d++) {
+            for (size_t i = 0; i < height; i++) {
+                for (size_t j = 0; j < width; j++) {
+                    result.data[d][j][i] = data[d][i][j];
+                }
+            }
+        }
+        return result;
+    }
+
+    // softmax across width dimension for back-compatibility with old matrix class
+    Tensor3D softmax() const {
+        Tensor3D result(depth, height, width);
+        
+        for (size_t d = 0; d < depth; d++) {
+            for (size_t w = 0; w < width; w++) {  // equivalent to "columns" in Matrix
+                // find max
+                double max_val = -std::numeric_limits<double>::infinity();
+                for (size_t h = 0; h < height; h++) {  // equivalent to "rows" in Matrix
+                    max_val = std::max(max_val, data[d][h][w]);
+                }
+
+                // compute exp and sum
+                double sum = 0.0;
+                for (size_t h = 0; h < height; h++) {
+                    result.data[d][h][w] = std::exp(data[d][h][w] - max_val);
+                    sum += result.data[d][h][w];
+                }
+
+                // normalize
+                for (size_t h = 0; h < height; h++) {
+                    result.data[d][h][w] /= sum;
+                }
+            }
+        }
+        return result;
+    }
 };
+
+
 
 // layer class representing a single dense (fully connected) layer in the neural network
 class DenseLayer {
@@ -445,7 +639,7 @@ class ConvolutionLayer {
         // creates a list of kernel tensors - one for each output channel
         weights.reserve(out_channels);
         for (int i = 0; i < out_channels; i++) {
-            weights.emplace_back(kernel_size, kernel_size, channels_in);
+            weights.emplace_back(channels_in, kernel_size, kernel_size);
             weights.back().he_initialize();
         }
 
@@ -462,7 +656,7 @@ class ConvolutionLayer {
      * @return The output tensor after applying the layer's transformation (x, y, output_feature_map)
      */
     Tensor3D feedforward(const Tensor3D &input) {
-        Tensor3D output(input.width, input.height, weights.size());
+        Tensor3D output(weights.size(), input.height, input.width);
         int pad_amount = 0;
 
         if (mode == "same") {
@@ -1352,7 +1546,7 @@ int main() {
     int output_channels = 5;
     int kernel_size = 3;
     ConvolutionLayer convlayer(input_channels, output_channels, kernel_size);
-    Tensor3D kernel(kernel_size, kernel_size, input_channels);
+    Tensor3D kernel(input_channels, kernel_size, kernel_size);
 
     Tensor3D result = convlayer.feedforward(kernel);
 
