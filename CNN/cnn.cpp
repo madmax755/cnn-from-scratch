@@ -327,7 +327,7 @@ class Tensor3D {
     Tensor3D flatten() const {
         // create tensor of shape (1, depth*height*width, 1)
         Tensor3D result(1, depth * height * width, 1);
-        
+
         // copy values sequentially
         size_t idx = 0;
         for (size_t d = 0; d < depth; d++) {
@@ -338,7 +338,7 @@ class Tensor3D {
                 }
             }
         }
-        
+
         return result;
     }
 };
@@ -349,7 +349,6 @@ class Layer {
 
     // pure virtual class - requires implementation in derived objects.
     virtual Tensor3D feedforward(const Tensor3D &input) = 0;
-
 };
 
 class DenseLayer : public Layer {
@@ -382,7 +381,9 @@ class DenseLayer : public Layer {
      */
     Tensor3D feedforward(const Tensor3D &input) override {
         if (weights.width != input.height) {
-            throw std::runtime_error("Input vector dimension is not appropriate for the weight matrix dimension, check input dimensions against layer dimensions");
+            throw std::runtime_error(
+                "Input vector dimension is not appropriate for the weight matrix dimension, check input dimensions against layer "
+                "dimensions");
         }
         Tensor3D z = weights * input + bias;
         Tensor3D output(z.height, z.width);
@@ -484,6 +485,54 @@ class ConvolutionLayer : public Layer {
     }
 };
 
+class PoolingLayer : public Layer {
+   public:
+    int kernel_size;
+    int stride;
+    std::string mode;
+
+    PoolingLayer(int kernel_size = 2, int stride = -1, std::string mode = "max")
+        : kernel_size(kernel_size), stride(stride == -1 ? kernel_size : stride), mode(mode) {
+        if (stride > kernel_size) {
+            throw std::runtime_error("stride should not be greater than kernel size");
+        }
+    }
+
+    Tensor3D feedforward(const Tensor3D &input) override {
+        // calculate output dimensions including partial window pooling
+        int new_height = std::ceil((input.height - kernel_size) / stride + 1);
+        int new_width = std::ceil((input.width - kernel_size) / stride + 1);
+        Tensor3D output(input.depth, new_height, new_width);
+
+        if (mode == "max") {
+            for (int d = 0; d < input.depth; ++d) {
+                for (int y = 0; y < new_height; ++y) {
+                    for (int x = 0; x < new_width; ++x) {
+                        // calculate window boundaries
+                        int start_y = y * stride;
+                        int start_x = x * stride;
+                        int end_y = std::min(start_y + kernel_size, static_cast<int>(input.height));
+                        int end_x = std::min(start_x + kernel_size, static_cast<int>(input.width));
+                        
+                        // find maximum in this window
+                        double max_val = -std::numeric_limits<double>::infinity();
+                        for (int wy = start_y; wy < end_y; ++wy) {
+                            for (int wx = start_x; wx < end_x; ++wx) {
+                                max_val = std::max(max_val, input.data[d][wy][wx]);
+                            }
+                        }
+                        output.data[d][y][x] = max_val;
+                    }
+                }
+            }
+        } else {
+            throw std::runtime_error("mode not specified or handled correctly");
+        }
+
+        return output;
+    }
+};
+
 class Loss {
    public:
     virtual ~Loss() = default;
@@ -552,7 +601,8 @@ class Optimiser {
     virtual ~Optimiser() = default;
 
     struct GradientResult {
-        std::vector<std::vector<Tensor3D>> gradients;  // list of layers, each layer has a list of weight and bias gradient matrices
+        std::vector<std::vector<Tensor3D>>
+            gradients;                  // list of layers, each layer has a list of weight and bias gradient matrices
         Tensor3D input_layer_gradient;  // gradient of the input layer - for more general use as parts of bigger architectures
         Tensor3D output;                // output of the network
     };
@@ -564,8 +614,8 @@ class Optimiser {
      * @param target The target matrix.
      * @return A GradientResult struct containing gradients and the output of the network.
      */
-    virtual GradientResult calculate_gradient(const std::vector<DenseLayer> &layers, const Tensor3D &input, const Tensor3D &target,
-                                              const Loss &loss) {
+    virtual GradientResult calculate_gradient(const std::vector<DenseLayer> &layers, const Tensor3D &input,
+                                              const Tensor3D &target, const Loss &loss) {
         // forward pass
         std::vector<Tensor3D> activations = {input};
         std::vector<Tensor3D> preactivations = {input};
@@ -671,7 +721,8 @@ class SGDOptimiser : public Optimiser {
     void initialise_velocity(const std::vector<DenseLayer> &layers) {
         velocity.clear();
         for (const auto &layer : layers) {
-            velocity.push_back({Tensor3D(layer.weights.height, layer.weights.width), Tensor3D(layer.bias.height, layer.bias.width)});
+            velocity.push_back(
+                {Tensor3D(layer.weights.height, layer.weights.width), Tensor3D(layer.bias.height, layer.bias.width)});
         }
     }
 
@@ -680,7 +731,8 @@ class SGDOptimiser : public Optimiser {
      * @param layers The layers of the neural network to update.
      * @param gradients The gradients used for updating the layers.
      */
-    void compute_and_apply_updates(std::vector<DenseLayer> &layers, const std::vector<std::vector<Tensor3D>> &gradients) override {
+    void compute_and_apply_updates(std::vector<DenseLayer> &layers,
+                                   const std::vector<std::vector<Tensor3D>> &gradients) override {
         if (velocity.empty()) {
             initialise_velocity(layers);
         }
@@ -719,7 +771,8 @@ class SGDMomentumOptimiser : public Optimiser {
     void initialise_velocity(const std::vector<DenseLayer> &layers) {
         velocity.clear();
         for (const auto &layer : layers) {
-            velocity.push_back({Tensor3D(layer.weights.height, layer.weights.width), Tensor3D(layer.bias.height, layer.bias.width)});
+            velocity.push_back(
+                {Tensor3D(layer.weights.height, layer.weights.width), Tensor3D(layer.bias.height, layer.bias.width)});
         }
     }
 
@@ -728,7 +781,8 @@ class SGDMomentumOptimiser : public Optimiser {
      * @param layers The layers of the neural network to update.
      * @param gradients The gradients used for updating the layers.
      */
-    void compute_and_apply_updates(std::vector<DenseLayer> &layers, const std::vector<std::vector<Tensor3D>> &gradients) override {
+    void compute_and_apply_updates(std::vector<DenseLayer> &layers,
+                                   const std::vector<std::vector<Tensor3D>> &gradients) override {
         if (velocity.empty()) {
             initialise_velocity(layers);
         }
@@ -767,7 +821,8 @@ class NesterovMomentumOptimiser : public Optimiser {
     void initialise_velocity(const std::vector<DenseLayer> &layers) {
         velocity.clear();
         for (const auto &layer : layers) {
-            velocity.push_back({Tensor3D(layer.weights.height, layer.weights.width), Tensor3D(layer.bias.height, layer.bias.width)});
+            velocity.push_back(
+                {Tensor3D(layer.weights.height, layer.weights.width), Tensor3D(layer.bias.height, layer.bias.width)});
         }
     }
 
@@ -803,7 +858,8 @@ class NesterovMomentumOptimiser : public Optimiser {
      * @param layers The layers of the neural network to update.
      * @param gradients The gradients used for updating the layers.
      */
-    void compute_and_apply_updates(std::vector<DenseLayer> &layers, const std::vector<std::vector<Tensor3D>> &gradients) override {
+    void compute_and_apply_updates(std::vector<DenseLayer> &layers,
+                                   const std::vector<std::vector<Tensor3D>> &gradients) override {
         if (velocity.empty()) {
             initialise_velocity(layers);
         }
@@ -827,7 +883,7 @@ class AdamOptimiser : public Optimiser {
     double beta1;
     double beta2;
     double epsilon;
-    int t;                               // timestep
+    int t;                                 // timestep
     std::vector<std::vector<Tensor3D>> m;  // first moment
     std::vector<std::vector<Tensor3D>> v;  // second moment
 
@@ -862,7 +918,8 @@ class AdamOptimiser : public Optimiser {
      * @param layers The layers of the neural network to update.
      * @param gradients The gradients used for updating the layers.
      */
-    void compute_and_apply_updates(std::vector<DenseLayer> &layers, const std::vector<std::vector<Tensor3D>> &gradients) override {
+    void compute_and_apply_updates(std::vector<DenseLayer> &layers,
+                                   const std::vector<std::vector<Tensor3D>> &gradients) override {
         if (m.empty() or v.empty()) {
             initialise_moments(layers);
         }
@@ -904,7 +961,7 @@ class AdamWOptimiser : public Optimiser {
     double beta2;
     double epsilon;
     double weight_decay;
-    int t;                               // timestep
+    int t;                                 // timestep
     std::vector<std::vector<Tensor3D>> m;  // first moment
     std::vector<std::vector<Tensor3D>> v;  // second moment
 
@@ -940,7 +997,8 @@ class AdamWOptimiser : public Optimiser {
      * @param layers The layers of the neural network to update.
      * @param gradients The gradients used for updating the layers.
      */
-    void compute_and_apply_updates(std::vector<DenseLayer> &layers, const std::vector<std::vector<Tensor3D>> &gradients) override {
+    void compute_and_apply_updates(std::vector<DenseLayer> &layers,
+                                   const std::vector<std::vector<Tensor3D>> &gradients) override {
         if (m.empty() || v.empty()) {
             initialise_moments(layers);
         }
@@ -1011,17 +1069,16 @@ class NeuralNetwork {
     NeuralNetwork() {}
 
     // add a layer to the network
-    template<typename LayerType>
+    template <typename LayerType>
     void add_layer(std::unique_ptr<LayerType> layer) {
-        if (dynamic_cast<ConvolutionLayer*>(layer.get())) {
-            if (!layers.empty() && dynamic_cast<DenseLayer*>(layers.back().get())) {
+        if (dynamic_cast<ConvolutionLayer *>(layer.get())) {
+            if (!layers.empty() && dynamic_cast<DenseLayer *>(layers.back().get())) {
                 throw std::runtime_error("Convolution layer cannot (currently) be added after a dense layer");
             }
         }
         layers.push_back(std::unique_ptr<Layer>(layer.release()));
     }
 
- 
     /**
      * @brief Sets the optimiser for the neural network.
      * @param new_optimiser A unique pointer to the new Optimiser object.
@@ -1039,38 +1096,48 @@ class NeuralNetwork {
      * @param input The input matrix.
      * @return The output matrix after passing through all layers.
      */
-    Tensor3D feedforward(const Tensor3D& input) {
+    Tensor3D feedforward(const Tensor3D &input) {
         Tensor3D current = input;
-        
+
         for (size_t i = 0; i < layers.size(); i++) {
             // attempt to cast base type pointer to derived type pointer (returns nullptr if not possible)
-            auto* current_conv = dynamic_cast<ConvolutionLayer*>(layers[i].get());
-            auto* current_dense = dynamic_cast<DenseLayer*>(layers[i].get());
-            
+            auto *current_conv = dynamic_cast<ConvolutionLayer *>(layers[i].get());
+            auto *current_dense = dynamic_cast<DenseLayer *>(layers[i].get());
+            auto *current_pooling = dynamic_cast<PoolingLayer *>(layers[i].get());
+
             // get next layer type (if it exists)
-            ConvolutionLayer* next_conv = nullptr;
-            DenseLayer* next_dense = nullptr;
+            ConvolutionLayer *next_conv = nullptr;
+            DenseLayer *next_dense = nullptr;
+            PoolingLayer *next_pooling = nullptr;
             if (i + 1 < layers.size()) {
-                next_conv = dynamic_cast<ConvolutionLayer*>(layers[i + 1].get());
-                next_dense = dynamic_cast<DenseLayer*>(layers[i + 1].get());
+                next_conv = dynamic_cast<ConvolutionLayer *>(layers[i + 1].get());
+                next_dense = dynamic_cast<DenseLayer *>(layers[i + 1].get());
+                next_pooling = dynamic_cast<PoolingLayer *>(layers[i + 1].get());
             }
 
             // handle transitions
             if (current_conv) {
                 current = current_conv->feedforward(current);
-                
-                // if next layer is dense, we need to flatten
+
+                // if next layer is dense, we need to flatten to (1, N, 1) where N is total elements
                 if (next_dense) {
-                    // reshape to (1, N, 1) where N is total elements
-                    size_t total_elements = current.depth * current.height * current.width;
                     current = current.flatten();
                 }
             }
-            // once we hit a dense layer all layers after that must be dense // todo add logic to ensure this
-            else if (current_dense) {
-                current = current_dense->feedforward(current);
+            else if (current_pooling) {
+                current = current_pooling->feedforward(current);
+
+                // if next layer is dense, we need to flatten to (1, N, 1) where N is total elements
+                if (next_dense) {
+                    current = current.flatten();
+                }
             }
-            else {
+            else if (current_dense) {
+                if (next_pooling or next_conv) {
+                    throw std::runtime_error("dense layer cannot be followed by a pooling or convolution layer");
+                }
+                current = current_dense->feedforward(current);
+            } else {
                 throw std::runtime_error("unknown layer type encountered");
             }
         }
@@ -1078,10 +1145,9 @@ class NeuralNetwork {
     }
 };
 
-
 // todo:
-// - add pooling layer
-
+// - dynamic input dimension calculation on first forward pass to mitigate need to manually calculate input dimensions for each
+//   layer especially with partial window pooling
 
 // runner code
 int main() {
@@ -1093,8 +1159,10 @@ int main() {
     // test usage
     NeuralNetwork nn;
     nn.add_layer(std::make_unique<ConvolutionLayer>(input_channels, 5, kernel_size));
-    nn.add_layer(std::make_unique<DenseLayer>(10 * input_width * input_height, 10, "sigmoid")); // assuming 'same' padding
+    nn.add_layer(std::make_unique<PoolingLayer>());
     nn.add_layer(std::make_unique<ConvolutionLayer>(5, 10, kernel_size));
+    nn.add_layer(std::make_unique<PoolingLayer>());
+    nn.add_layer(std::make_unique<DenseLayer>(10 * (input_width) * (input_height), 10, "sigmoid"));  // assuming 'same' padding
     nn.add_layer(std::make_unique<DenseLayer>(10, 1, "none"));
 
     // test feedforward
