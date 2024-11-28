@@ -381,6 +381,9 @@ class DenseLayer : public Layer {
      * @return The output matrix after applying the layer's transformation.
      */
     Tensor3D feedforward(const Tensor3D &input) override {
+        if (weights.width != input.height) {
+            throw std::runtime_error("Input vector dimension is not appropriate for the weight matrix dimension, check input dimensions against layer dimensions");
+        }
         Tensor3D z = weights * input + bias;
         Tensor3D output(z.height, z.width);
         if (activation_function == "sigmoid") {
@@ -449,6 +452,13 @@ class ConvolutionLayer : public Layer {
      * @return The output tensor after applying the layer's transformation (x, y, output_feature_map)
      */
     Tensor3D feedforward(const Tensor3D &input) override {
+        if (input.depth != channels_in) {
+            throw std::runtime_error("Input tensor depth does not match the number of input channels for this layer");
+        }
+        if (input.height == 0 or input.width == 0) {
+            throw std::runtime_error("Input tensor has zero height or width");
+        }
+
         Tensor3D output(weights.size(), input.height, input.width);
         int pad_amount = 0;
 
@@ -1003,7 +1013,11 @@ class NeuralNetwork {
     // add a layer to the network
     template<typename LayerType>
     void add_layer(std::unique_ptr<LayerType> layer) {
-        // fixme add checking for compatible layer types/dimensions
+        if (dynamic_cast<ConvolutionLayer*>(layer.get())) {
+            if (!layers.empty() && dynamic_cast<DenseLayer*>(layers.back().get())) {
+                throw std::runtime_error("Convolution layer cannot (currently) be added after a dense layer");
+            }
+        }
         layers.push_back(std::unique_ptr<Layer>(layer.release()));
     }
 
@@ -1064,6 +1078,11 @@ class NeuralNetwork {
     }
 };
 
+
+// todo:
+// - add pooling layer
+
+
 // runner code
 int main() {
     int input_width = 28;
@@ -1074,8 +1093,8 @@ int main() {
     // test usage
     NeuralNetwork nn;
     nn.add_layer(std::make_unique<ConvolutionLayer>(input_channels, 5, kernel_size));
-    nn.add_layer(std::make_unique<ConvolutionLayer>(5, 10, kernel_size));
     nn.add_layer(std::make_unique<DenseLayer>(10 * input_width * input_height, 10, "sigmoid")); // assuming 'same' padding
+    nn.add_layer(std::make_unique<ConvolutionLayer>(5, 10, kernel_size));
     nn.add_layer(std::make_unique<DenseLayer>(10, 1, "none"));
 
     // test feedforward
