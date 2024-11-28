@@ -291,6 +291,19 @@ class Matrix {
     }
 };
 
+class Tensor3D {
+   public:
+    std::vector<Matrix> data;
+    size_t rows, cols, depth;
+
+    Tensor3D(size_t rows, size_t cols, size_t depth) : rows(rows), cols(cols), depth(depth) {
+        data.reserve(depth);
+        for (size_t i = 0; i < depth; i++) {
+            data.emplace_back(rows, cols);
+        }
+    }
+};
+
 // layer class representing a single dense (fully connected) layer in the neural network
 class DenseLayer {
    public:
@@ -355,6 +368,37 @@ class DenseLayer {
         }
 
         return {output, z};
+    }
+};
+
+class ConvolutionLayer {
+   public:
+    std::vector<Tensor3D> weights;
+    std::vector<double> bias;
+    int channels_in;
+    int out_channels;
+    int kernel_size;
+    int stride;
+    int padding;
+    std::string mode;
+
+    ConvolutionLayer(int channels_in, int out_channels, int kernel_size, int stride = 1, int padding = 0, std::string mode = "same")
+        : channels_in(channels_in),
+          out_channels(out_channels),
+          kernel_size(kernel_size),
+          stride(stride),
+          padding(padding),
+          mode(mode) {
+
+        weights.reserve(out_channels);
+        for (int i = 0; i < out_channels; i++) {
+            weights.emplace_back(kernel_size, kernel_size, channels_in);
+        }
+
+        bias.reserve(out_channels);
+        for (int i = 0; i < out_channels; i++) {
+            bias.push_back(0.0);
+        }
     }
 };
 
