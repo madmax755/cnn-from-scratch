@@ -334,7 +334,7 @@ class Layer {
 
 };
 
-class DenseLayer {
+class DenseLayer : Layer{
    public:
     Tensor3D weights;
     Tensor3D bias;
@@ -362,7 +362,7 @@ class DenseLayer {
      * @param input The input matrix.
      * @return The output matrix after applying the layer's transformation.
      */
-    Tensor3D feedforward(const Tensor3D &input) {
+    Tensor3D feedforward(const Tensor3D &input) override {
         Tensor3D z = weights * input + bias;
         Tensor3D output(z.height, z.width);
         if (activation_function == "sigmoid") {
@@ -400,7 +400,7 @@ class DenseLayer {
     }
 };
 
-class ConvolutionLayer {
+class ConvolutionLayer : Layer {
    public:
     std::vector<Tensor3D> weights;
     std::vector<double> bias;
@@ -431,7 +431,7 @@ class ConvolutionLayer {
      * @param input The input tensor usually (x, y, RGB channel).
      * @return The output tensor after applying the layer's transformation (x, y, output_feature_map)
      */
-    Tensor3D feedforward(const Tensor3D &input) {
+    Tensor3D feedforward(const Tensor3D &input) override {
         Tensor3D output(weights.size(), input.height, input.width);
         int pad_amount = 0;
 
@@ -956,11 +956,9 @@ class AdamWOptimiser : public Optimiser {
 
 class NeuralNetwork {
    public:
-    std::vector<DenseLayer> layers;
+    std::vector<std::unique_ptr<Layer>> layers;
     std::unique_ptr<Optimiser> optimiser;
     std::unique_ptr<Loss> loss;
-    // have to use a pointer otherwise class cannot be constructed (mutex is not moveable/copyable etc.)
-    std::unique_ptr<std::mutex> layers_mutex;
 
     struct EvaluationMetrics {
         double loss;
@@ -982,49 +980,16 @@ class NeuralNetwork {
         }
     };
 
-    /**
-     * @brief Constructs a NeuralNetwork object with the specified topology and activation functions.
-     * @param topology A vector specifying the number of neurons in each layer.
-     * @param activation_functions A vector specifying the activation function for each layer (optional).
-     */
-    NeuralNetwork(const std::vector<int> &topology, const std::vector<std::string> activation_functions = {})
-        : layers_mutex(std::make_unique<std::mutex>()) {
-        if (topology.empty()) {
-            throw std::invalid_argument("Topology cannot be empty");
-        }
-        for (int size : topology) {
-            if (size <= 0) {
-                throw std::invalid_argument("DenseLayer size must be positive");
-            }
-        }
-        if ((activation_functions.size() + 1 != topology.size()) and (activation_functions.size() != 0)) {
-            throw std::invalid_argument(
-                "the size of activations_functions vector must be the same size as no. layers (ex. input)");
-        } else if (activation_functions.size() == 0) {
-            for (size_t i = 1; i < topology.size(); i++) {
-                // do not pass in specific activation function - use the default specified in the layer constructor
-                layers.emplace_back(topology[i - 1], topology[i]);
-            }
-        } else {
-            for (size_t i = 1; i < topology.size(); i++) {
-                layers.emplace_back(topology[i - 1], topology[i], activation_functions[i - 1]);
-            }
-        }
+    // default constructor
+    NeuralNetwork() {}
+
+    // add a layer to the network
+    template<typename LayerType>
+    void add_layer(std::unique_ptr<LayerType> layer) {
+        layers.push_back(std::move(layer));
     }
 
-    /**
-     * @brief Performs feedforward operation through all layers of the network.
-     * @param input The input matrix.
-     * @return The output matrix after passing through all layers.
-     */
-    Tensor3D feedforward(const Tensor3D &input) {
-        Tensor3D current = input;
-        for (auto &layer : layers) {
-            current = layer.feedforward(current);
-        }
-        return current;
-    }
-
+ 
     /**
      * @brief Sets the optimiser for the neural network.
      * @param new_optimiser A unique pointer to the new Optimiser object.
@@ -1037,283 +1002,20 @@ class NeuralNetwork {
      */
     void set_loss(std::unique_ptr<Loss> new_loss) { loss = std::move(new_loss); }
 
-    // train the neural network using optimiser set
-    void train_mt_optimiser(const std::vector<std::vector<Tensor3D>> &training_data,
-                            const std::vector<std::vector<Tensor3D>> &eval_data, int epochs, int batch_size) {
-        unsigned int num_threads = std::thread::hardware_concurrency();
-        std::vector<std::thread> threads(num_threads);
-        std::vector<std::vector<std::vector<std::vector<Tensor3D>>>> thread_gradients(num_threads);
-        std::mutex gradients_mutex;
-        int counter = 0;
-
-        // used for tracking loss of each batch
-        std::vector<Tensor3D> batch_outputs;
-        std::vector<Tensor3D> batch_targets;
-
-        // create a vector of indices
-        std::vector<size_t> indices(training_data.size());
-        std::iota(indices.begin(), indices.end(), 0);
-
-        // random number generator
-        std::random_device rd;
-        std::mt19937 generator(rd());
-
-        // iterate through epochs
-        for (int epoch = 0; epoch < epochs; epoch++) {
-            std::shuffle(indices.begin(), indices.end(), generator);
-
-            std::cout << "Epoch " << epoch + 1 << "\n";
-
-            // iterate through batches
-            for (size_t batch_start = 0; batch_start < training_data.size(); batch_start += batch_size) {
-                // Clear previous batch data
-                batch_outputs.clear();
-                batch_targets.clear();
-                size_t current_batch_size = std::min(batch_size, static_cast<int>(training_data.size() - batch_start));
-                batch_outputs.reserve(current_batch_size);
-                batch_targets.reserve(current_batch_size);
-
-                // clear previous gradients
-                for (auto &grad : thread_gradients) {
-                    grad.clear();
-                }
-
-                // spawn threads - splits the batch up between the number of threads
-                for (unsigned int t = 0; t < num_threads; t++) {
-                    threads[t] = std::thread([&, t, current_batch_size, batch_start]() {
-                        size_t start = t * current_batch_size / num_threads;
-                        size_t end = (t + 1) * current_batch_size / num_threads;
-
-                        std::vector<std::vector<std::vector<Tensor3D>>> local_gradients;
-                        local_gradients.reserve(end - start);
-
-                        // Local vectors to collect outputs and targets
-                        std::vector<Tensor3D> local_outputs;
-                        std::vector<Tensor3D> local_targets;
-                        local_outputs.reserve(end - start);
-                        local_targets.reserve(end - start);
-
-                        for (size_t i = start; i < end; i++) {
-                            size_t index = indices[batch_start + i];
-                            if (index < training_data.size()) {
-                                const auto &data_pair = training_data[index];
-                                const Tensor3D &input = data_pair[0];
-                                const Tensor3D &target = data_pair[1];
-                                auto [gradient, input_layer_gradient, output] =
-                                    optimiser->calculate_gradient(layers, input, target, *loss);
-                                local_gradients.push_back(gradient);
-                                local_outputs.push_back(output);
-                                local_targets.push_back(target);
-                            }
-                        }
-
-                        // Single lock to update shared data
-                        {
-                            std::lock_guard<std::mutex> lock(gradients_mutex);
-                            batch_outputs.insert(batch_outputs.end(), local_outputs.begin(), local_outputs.end());
-                            batch_targets.insert(batch_targets.end(), local_targets.begin(), local_targets.end());
-                            thread_gradients[t] = std::move(local_gradients);
-                        }
-                    });
-                }
-
-                // join threads
-                for (auto &thread : threads) {
-                    thread.join();
-                }
-
-                // flatten gradients
-                std::vector<std::vector<std::vector<Tensor3D>>> batch_gradients;
-                for (const auto &thread_grad : thread_gradients) {
-                    batch_gradients.insert(batch_gradients.end(), thread_grad.begin(), thread_grad.end());
-                }
-
-                // average gradients
-                auto avg_gradient = optimiser->average_gradients(batch_gradients);
-
-                // apply gradients
-                optimiser->compute_and_apply_updates(layers, avg_gradient);
-            }
-            auto eval_results = evaluate_nn(eval_data);
-            std::cout << eval_results << std::endl;
-        }
-    }
-
     /**
-     * @brief Trains the neural network using multi-threaded optimization.
-     * @param training_data The training dataset.
-     * @param eval_data The evaluation dataset.
-     * @param epochs The number of training epochs.
-     * @param batch_size The size of each batch for training.
+     * @brief Performs feedforward operation through all layers of the network.
+     * @param input The input matrix.
+     * @return The output matrix after passing through all layers.
      */
-    size_t get_index_of_max_element_in_nx1_matrix(const Tensor3D &matrix) const {
-        size_t index = 0;
-        double max_value = matrix.data[0][0][0];
-        for (size_t i = 1; i < matrix.height; ++i) {
-            if (matrix.data[0][i][0] > max_value) {
-                index = i;
-                max_value = matrix.data[0][i][0];
-            }
+    Tensor3D feedforward(const Tensor3D &input) {
+        // fixme this currently does not work - need a bridge between convolutional and dense layers
+        Tensor3D current = input;
+        for (auto &layer : layers) {
+            current = layer->feedforward(current);
         }
-        return index;
+        return current;
     }
 
-    /**
-     * @brief Evaluates the neural network on the given test data.
-     * @param test_data The test dataset.
-     * @return An EvaluationMetrics struct containing accuracy, precision, recall, and F1 score.
-     */
-    EvaluationMetrics evaluate_nn(const std::vector<std::vector<Tensor3D>> &test_data) {
-        if (test_data.empty() or test_data[0].size() != 2) {
-            throw std::invalid_argument(
-                "Test data must be a non-empty vector of vectors, each containing an input and a target matrix.");
-        }
-
-        int true_positives = 0, false_positives = 0, false_negatives = 0;
-        int total_correct = 0;
-        size_t total_examples = test_data.size();
-
-        double total_loss = 0.0;
-        for (const auto &example : test_data) {
-            const Tensor3D &input = example[0];
-            const Tensor3D &target = example[1];
-
-            Tensor3D output = this->feedforward(input);
-            total_loss += loss->compute(output, target);
-
-            // assuming output and target are nx1 matrices
-            size_t predicted_class = get_index_of_max_element_in_nx1_matrix(output);
-            size_t actual_class = get_index_of_max_element_in_nx1_matrix(target);
-
-            if (predicted_class == actual_class) {
-                total_correct++;
-                true_positives++;
-            } else {
-                false_positives++;
-                false_negatives++;
-            }
-        }
-
-        double average_loss = total_loss / total_examples;
-
-        double accuracy = static_cast<double>(total_correct) / total_examples;
-
-        // avoid division by zero
-        double precision = (true_positives + false_positives > 0)
-                               ? static_cast<double>(true_positives) / (true_positives + false_positives)
-                               : 0.0;
-        double recall = (true_positives + false_negatives > 0)
-                            ? static_cast<double>(true_positives) / (true_positives + false_negatives)
-                            : 0.0;
-
-        double f1_score = (precision + recall > 0) ? 2 * (precision * recall) / (precision + recall) : 0.0;
-
-        return {average_loss, accuracy, precision, recall, f1_score};
-    }
-
-    /**
-     * @brief Saves the current state of the neural network to a file.
-     * @param filename The name of the file to save the model to.
-     */
-    void save_model(const std::string &filename) const {
-        std::ofstream file(filename, std::ios::binary);
-        if (!file) {
-            throw std::runtime_error("Unable to open file for writing: " + filename);
-        }
-
-        uint32_t num_layers = static_cast<uint32_t>(layers.size());
-        file.write(reinterpret_cast<const char *>(&num_layers), sizeof(num_layers));
-
-        // first, write all layer information
-        for (size_t i = 0; i < layers.size(); ++i) {
-            const auto &layer = layers[i];
-            uint32_t input_size = static_cast<uint32_t>(layer.weights.width);
-            uint32_t output_size = static_cast<uint32_t>(layer.weights.height);
-
-            file.write(reinterpret_cast<const char *>(&input_size), sizeof(input_size));
-            file.write(reinterpret_cast<const char *>(&output_size), sizeof(output_size));
-
-            uint32_t activation_function_length = static_cast<uint32_t>(layer.activation_function.length());
-            file.write(reinterpret_cast<const char *>(&activation_function_length), sizeof(activation_function_length));
-            file.write(layer.activation_function.c_str(), activation_function_length);
-        }
-
-        // then, write all weights and biases
-        for (size_t i = 0; i < layers.size(); ++i) {
-            const auto &layer = layers[i];
-
-            for (const auto &row : layer.weights.data) {
-                file.write(reinterpret_cast<const char *>(row.data()), row.size() * sizeof(double));
-            }
-
-            for (const auto &row : layer.bias.data) {
-                file.write(reinterpret_cast<const char *>(row.data()), row.size() * sizeof(double));
-            }
-        }
-
-        std::cout << "Model saved successfully. File size: " << file.tellp() << " bytes" << std::endl;
-    }
-
-    /**
-     * @brief Loads a neural network model from a file.
-     * @param filename The name of the file to load the model from.
-     * @return A NeuralNetwork object initialised with the loaded model.
-     */
-    static NeuralNetwork load_model(const std::string &filename) {
-        std::ifstream file(filename, std::ios::binary);
-        if (!file) {
-            throw std::runtime_error("Unable to open file for reading: " + filename);
-        }
-
-        uint32_t num_layers;
-        file.read(reinterpret_cast<char *>(&num_layers), sizeof(num_layers));
-
-        std::vector<int> topology;
-        std::vector<std::string> activation_functions;
-
-        // first, read all layer information
-        for (uint32_t i = 0; i < num_layers; ++i) {
-            uint32_t input_size, output_size;
-            file.read(reinterpret_cast<char *>(&input_size), sizeof(input_size));
-            file.read(reinterpret_cast<char *>(&output_size), sizeof(output_size));
-
-            if (i == 0) {
-                topology.push_back(input_size);
-            }
-            topology.push_back(output_size);
-
-            uint32_t activation_function_length;
-            file.read(reinterpret_cast<char *>(&activation_function_length), sizeof(activation_function_length));
-
-            std::string activation_function(activation_function_length, '\0');
-            file.read(&activation_function[0], activation_function_length);
-
-            activation_functions.push_back(activation_function);
-        }
-
-        // create the network with the loaded topology and activation functions
-        NeuralNetwork nn(topology, activation_functions);
-
-        // then, read all weights and biases
-        for (uint32_t i = 0; i < num_layers; ++i) {
-            auto &layer = nn.layers[i];
-
-            for (auto &row : layer.weights.data) {
-                file.read(reinterpret_cast<char *>(row.data()), row.size() * sizeof(double));
-            }
-
-            for (auto &row : layer.bias.data) {
-                file.read(reinterpret_cast<char *>(row.data()), row.size() * sizeof(double));
-            }
-        }
-
-        if (file.peek() != EOF) {
-            throw std::runtime_error("Unexpected data at end of file");
-        }
-
-        std::cout << "Model loaded successfully" << std::endl;
-        return nn;
-    }
 };
 
 // runner code
@@ -1324,4 +1026,11 @@ int main() {
     ConvolutionLayer convlayer(input_channels, output_channels, kernel_size);
     Tensor3D kernel(input_channels, kernel_size, kernel_size);
     Tensor3D result = convlayer.feedforward(kernel);
+
+    // example usage
+    // NeuralNetwork nn;
+    // nn.add_layer(std::make_unique<ConvolutionLayer>(input_channels, output_channels, kernel_size));
+    // nn.add_layer(std::make_unique<DenseLayer>(100, 10, "sigmoid"));
+    // nn.add_layer(std::make_unique<DenseLayer>(10, 1, "none"));
+
 }
