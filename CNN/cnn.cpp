@@ -363,7 +363,7 @@ class DenseLayer : public Layer {
      * @param output_size The number of output neurons.
      * @param activation_function The activation function to use (default: "sigmoid").
      */
-    DenseLayer(size_t input_size, size_t output_size, std::string activation_function = "sigmoid")
+    DenseLayer(size_t input_size, size_t output_size, std::string activation_function = "relu")
         : weights(output_size, input_size), bias(output_size, 1), activation_function(activation_function) {
         if (activation_function == "sigmoid") {
             weights.xavier_initialise();
@@ -513,7 +513,7 @@ class PoolingLayer : public Layer {
                         int start_x = x * stride;
                         int end_y = std::min(start_y + kernel_size, static_cast<int>(input.height));
                         int end_x = std::min(start_x + kernel_size, static_cast<int>(input.width));
-                        
+
                         // find maximum in this window
                         double max_val = -std::numeric_limits<double>::infinity();
                         for (int wy = start_y; wy < end_y; ++wy) {
@@ -1040,10 +1040,101 @@ class AdamWOptimiser : public Optimiser {
 // -----------------------------------------------------------------------------------------------------
 
 class NeuralNetwork {
+   private:
+    struct LayerSpec {
+        enum Type { CONV, POOL, DENSE } type;
+
+        // conv parameters
+        int in_channels = 0;
+        int out_channels = 0;
+        int kernel_size = 0;
+        int stride = 1;
+        std::string mode = "same";
+
+        // pool parameters
+        int pool_size = 0;
+        int pool_stride = 0;
+        std::string pool_mode = "max";
+
+        // dense parameters
+        std::string activation = "relu";
+        size_t output_size = 0;
+
+        static LayerSpec Conv(int out_channels, int kernel_size, int stride = 1, std::string mode = "same") {
+            LayerSpec spec;
+            spec.type = CONV;
+            spec.out_channels = out_channels;
+            spec.kernel_size = kernel_size;
+            spec.stride = stride;
+            spec.mode = mode;
+            return spec;
+        }
+
+        static LayerSpec Pool(int pool_size = 2, int stride = -1, std::string mode = "max") {
+            LayerSpec spec;
+            spec.type = POOL;
+            spec.pool_size = pool_size;
+            spec.pool_stride = (stride == -1) ? pool_size : stride;
+            spec.pool_mode = mode;
+            return spec;
+        }
+
+        static LayerSpec Dense(size_t output_size, std::string activation = "relu") {
+            LayerSpec spec;
+            spec.type = DENSE;
+            spec.output_size = output_size;
+            spec.activation = activation;
+            return spec;
+        }
+    };
+
+    struct LayerDimensions {
+        size_t height;
+        size_t width;
+        size_t depth;
+    };
+
+    void create_layers(const Tensor3D &input) {
+        // stores the dimensions of the previous layer
+        LayerDimensions dims = {input.height, input.width, input.depth};
+
+        for (auto &spec : layer_specs) {
+            switch (spec.type) {
+                case LayerSpec::CONV: {
+                    spec.in_channels = dims.depth;
+                    layers.push_back(std::make_unique<ConvolutionLayer>(spec.in_channels, spec.out_channels, spec.kernel_size,
+                                                                        spec.stride, spec.mode));
+                    
+                    // change dims.width and dims.height here if ever put more modes than same
+
+                    dims.depth = spec.out_channels;
+                    break;
+                }
+                case LayerSpec::POOL: {
+                    layers.push_back(std::make_unique<PoolingLayer>(spec.pool_size, spec.pool_stride, spec.pool_mode));
+
+                    // update 'previous' layer dimensions with formula for pooling layer output dimensions
+                    dims.height = std::ceil((dims.height - spec.pool_size) / static_cast<double>(spec.pool_stride) + 1);
+                    dims.width = std::ceil((dims.width - spec.pool_size) / static_cast<double>(spec.pool_stride) + 1);
+                    break;
+                }
+                case LayerSpec::DENSE: {
+                    int total_inputs = dims.height * dims.width * dims.depth;
+                    layers.push_back(std::make_unique<DenseLayer>(total_inputs, spec.output_size, spec.activation));
+                    dims = {1, spec.output_size, 1};  // flatten
+                    break;
+                }
+            }
+        }
+        layers_created = true;
+    }
+
    public:
+    std::vector<LayerSpec> layer_specs;
     std::vector<std::unique_ptr<Layer>> layers;
     std::unique_ptr<Optimiser> optimiser;
     std::unique_ptr<Loss> loss;
+    bool layers_created = false;
 
     struct EvaluationMetrics {
         double loss;
@@ -1068,15 +1159,17 @@ class NeuralNetwork {
     // default constructor
     NeuralNetwork() {}
 
-    // add a layer to the network
-    template <typename LayerType>
-    void add_layer(std::unique_ptr<LayerType> layer) {
-        if (dynamic_cast<ConvolutionLayer *>(layer.get())) {
-            if (!layers.empty() && dynamic_cast<DenseLayer *>(layers.back().get())) {
-                throw std::runtime_error("Convolution layer cannot (currently) be added after a dense layer");
-            }
-        }
-        layers.push_back(std::unique_ptr<Layer>(layer.release()));
+    // user-facing funcs to add layers (just adds their specs to layer_specs to be created with correct input dimensions later)
+    void add_conv_layer(int out_channels, int kernel_size, int stride = 1, std::string mode = "same") {
+        layer_specs.push_back(LayerSpec::Conv(out_channels, kernel_size, stride, mode));
+    }
+
+    void add_pool_layer(int pool_size = 2, int stride = -1, std::string mode = "max") {
+        layer_specs.push_back(LayerSpec::Pool(pool_size, stride, mode));
+    }
+
+    void add_dense_layer(int output_size, std::string activation = "relu") {
+        layer_specs.push_back(LayerSpec::Dense(output_size, activation));
     }
 
     /**
@@ -1098,6 +1191,10 @@ class NeuralNetwork {
      */
     Tensor3D feedforward(const Tensor3D &input) {
         Tensor3D current = input;
+        if (!layers_created) {
+            // calculate input dimensions for each layer and create layer objects with these dimensions
+            create_layers(input);
+        }
 
         for (size_t i = 0; i < layers.size(); i++) {
             // attempt to cast base type pointer to derived type pointer (returns nullptr if not possible)
@@ -1123,16 +1220,14 @@ class NeuralNetwork {
                 if (next_dense) {
                     current = current.flatten();
                 }
-            }
-            else if (current_pooling) {
+            } else if (current_pooling) {
                 current = current_pooling->feedforward(current);
 
                 // if next layer is dense, we need to flatten to (1, N, 1) where N is total elements
                 if (next_dense) {
                     current = current.flatten();
                 }
-            }
-            else if (current_dense) {
+            } else if (current_dense) {
                 if (next_pooling or next_conv) {
                     throw std::runtime_error("dense layer cannot be followed by a pooling or convolution layer");
                 }
@@ -1146,7 +1241,7 @@ class NeuralNetwork {
 };
 
 // todo:
-// - dynamic input dimension calculation on first forward pass to mitigate need to manually calculate input dimensions for each
+// - dynamic input dimension calculation on layer addition to mitigate need to manually calculate input dimensions for each
 //   layer especially with partial window pooling
 
 // runner code
@@ -1158,12 +1253,13 @@ int main() {
 
     // test usage
     NeuralNetwork nn;
-    nn.add_layer(std::make_unique<ConvolutionLayer>(input_channels, 5, kernel_size));
-    nn.add_layer(std::make_unique<PoolingLayer>());
-    nn.add_layer(std::make_unique<ConvolutionLayer>(5, 10, kernel_size));
-    nn.add_layer(std::make_unique<PoolingLayer>());
-    nn.add_layer(std::make_unique<DenseLayer>(10 * (input_width) * (input_height), 10, "sigmoid"));  // assuming 'same' padding
-    nn.add_layer(std::make_unique<DenseLayer>(10, 1, "none"));
+    nn.add_conv_layer(5, kernel_size);
+    nn.add_pool_layer();
+    nn.add_conv_layer(10, kernel_size);
+    nn.add_pool_layer();
+    nn.add_dense_layer(20);
+    nn.add_dense_layer(10);
+    nn.add_dense_layer(1, "none");
 
     // test feedforward
     Tensor3D input(input_channels, input_height, input_width);
