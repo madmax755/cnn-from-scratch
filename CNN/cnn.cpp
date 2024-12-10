@@ -49,6 +49,12 @@ std::vector<unsigned char> read_file(const std::string &path) {
     }
 }
 
+struct BackwardReturn {
+    Tensor3D input_error;
+    std::vector<Tensor3D> weight_grads;
+    std::vector<Tensor3D> bias_grads;
+};
+
 class Tensor3D {
    public:
     std::vector<std::vector<std::vector<double>>> data;
@@ -357,6 +363,7 @@ class DenseLayer : public Layer {
     Tensor3D bias;
     std::string activation_function;
 
+
     /**
      * @brief Constructs a DenseLayer object with specified input size, output size, and activation function.
      * @param input_size The number of input neurons.
@@ -398,6 +405,27 @@ class DenseLayer : public Layer {
         }
         return output;
     }
+
+    BackwardReturn backward(const Tensor3D &d_output, const Tensor3D &input, const Tensor3D &activation) {
+        Tensor3D d_activation;
+        if (activation_function == "sigmoid") {
+            d_activation = activation.apply(sigmoid_derivative);
+        } else if (activation_function == "relu") {
+            d_activation = activation.apply(relu_derivative));
+        } else if (activation_function == "softmax" or activation_function == "none") {
+            // d_activation = d_activation
+        } else {
+            throw std::runtime_error("Unsupported activation function");
+        }
+
+        Tensor3D d_z = d_output.hadamard(d_activation);
+        Tensor3D d_input = weights.transpose() * d_z;
+        std::vector<Tensor3D> d_weights = {d_z * input.transpose()};    // technically a list for CNN layers where there are more than one kernel (set of weights)
+        std::vector<Tensor3D> d_bias = {d_z};   // same for bias
+
+        return {d_input, d_weights, d_bias};
+    }
+
 
     /**
      * @brief Performs feedforward operation for this layer and returns both output and pre-activation.
@@ -612,7 +640,7 @@ class Optimiser {
      * @param layers The layers of the neural network.
      * @param input The input matrix.
      * @param target The target matrix.
-     * @return A GradientResult struct containing gradients and the output of the network.
+     * @return A GradientResult struct containing gradients, input errors, and the output of the network.
      */
     virtual GradientResult calculate_gradient(const std::vector<DenseLayer> &layers, const Tensor3D &input,
                                               const Tensor3D &target, const Loss &loss) {
@@ -794,83 +822,6 @@ class SGDMomentumOptimiser : public Optimiser {
                 velocity[l][i] = (velocity[l][i] * momentum) - (gradients[l][i] * learning_rate);
             }
             // apply adjustments
-            layers[l].weights = layers[l].weights + velocity[l][0];
-            layers[l].bias = layers[l].bias + velocity[l][1];
-        }
-    }
-};
-
-class NesterovMomentumOptimiser : public Optimiser {
-   private:
-    double learning_rate;
-    double momentum;
-    std::vector<std::vector<Tensor3D>> velocity;
-
-   public:
-    /**
-     * @brief Constructs a NesterovMomentumOptimiser object with the specified learning rate and momentum.
-     * @param lr The learning rate (default: 0.1).
-     * @param mom The momentum coefficient (default: 0.9).
-     */
-    NesterovMomentumOptimiser(double lr = 0.1, double mom = 0.9) : learning_rate(lr), momentum(mom) {}
-
-    /**
-     * @brief initialises the velocity vectors for Nesterov Momentum optimization.
-     * @param layers The layers of the neural network.
-     */
-    void initialise_velocity(const std::vector<DenseLayer> &layers) {
-        velocity.clear();
-        for (const auto &layer : layers) {
-            velocity.push_back(
-                {Tensor3D(layer.weights.height, layer.weights.width), Tensor3D(layer.bias.height, layer.bias.width)});
-        }
-    }
-
-    /**
-     * @brief Calculates gradients using Nesterov momentum.
-     * @param layers The layers of the neural network.
-     * @param input The input matrix.
-     * @param target The target matrix.
-     * @return A GradientResult struct containing gradients and the output of the network.
-     */
-    GradientResult calculate_gradient(const std::vector<DenseLayer> &layers, const Tensor3D &input, const Tensor3D &target,
-                                      const Loss &loss) override {
-        // get lookahead position
-        std::vector<DenseLayer> tmp_layers = layers;
-        if (velocity.empty()) {
-            initialise_velocity(tmp_layers);
-        } else {
-            for (int l = 0; l < tmp_layers.size(); l++) {
-                tmp_layers[l].weights = tmp_layers[l].weights + (velocity[l][0] * momentum);
-                tmp_layers[l].bias = tmp_layers[l].bias + (velocity[l][1] * momentum);
-            }
-        }
-
-        // compute gradient at lookahead position
-        GradientResult gradients = Optimiser::calculate_gradient(tmp_layers, input, target, loss);
-
-        // this returns a GradientResult struct for the lookahead position (not totally correct for loss tracking but not bad)
-        return gradients;
-    }
-
-    /**
-     * @brief Computes and applies updates using Nesterov Momentum.
-     * @param layers The layers of the neural network to update.
-     * @param gradients The gradients used for updating the layers.
-     */
-    void compute_and_apply_updates(std::vector<DenseLayer> &layers,
-                                   const std::vector<std::vector<Tensor3D>> &gradients) override {
-        if (velocity.empty()) {
-            initialise_velocity(layers);
-        }
-
-        // compute and apply updates
-        for (size_t l = 0; l < layers.size(); ++l) {
-            for (int i = 0; i < 2; ++i) {  // 0 for weights, 1 for biases
-                // compute adjustments
-                velocity[l][i] = (velocity[l][i] * momentum) - (gradients[l][i] * learning_rate);
-            }
-            // apply updates
             layers[l].weights = layers[l].weights + velocity[l][0];
             layers[l].bias = layers[l].bias + velocity[l][1];
         }
