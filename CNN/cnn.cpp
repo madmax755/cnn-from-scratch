@@ -49,11 +49,6 @@ std::vector<unsigned char> read_file(const std::string &path) {
     }
 }
 
-struct BackwardReturn {
-    Tensor3D input_error;
-    std::vector<Tensor3D> weight_grads;
-    std::vector<Tensor3D> bias_grads;
-};
 
 class Tensor3D {
    public:
@@ -219,6 +214,18 @@ class Tensor3D {
         return result;
     }
 
+    Tensor3D operator+(const double &other) const {
+        Tensor3D result(depth, height, width);
+        for (size_t d = 0; d < depth; d++) {
+            for (size_t i = 0; i < height; i++) {
+                for (size_t j = 0; j < width; j++) {
+                    result.data[d][i][j] = data[d][i][j] + other;
+                }
+            }
+        }
+        return result;
+    }
+
     Tensor3D operator-(const Tensor3D &other) const {
         if (height != other.height || width != other.width || depth != other.depth) {
             throw std::invalid_argument("tensor dimensions don't match for subtraction");
@@ -347,6 +354,26 @@ class Tensor3D {
 
         return result;
     }
+
+    static Tensor3D Conv(const Tensor3D &big, const Tensor3D &small) {
+        // todo add error checking for dimensions
+
+        int pad_amount = (small.height - 1) / 2;
+        Tensor3D output(big.height - pad_amount, big.width - pad_amount);
+
+        for (int y = pad_amount; y < big.height - pad_amount; ++y) {
+            for (int x = pad_amount; x < big.width - pad_amount; ++x) {
+                output.data[0][y - pad_amount][x - pad_amount] = big.dot_with_kernel_at_postion(small, x, y);
+            }
+        }
+        return output;
+    }
+};
+
+struct BackwardReturn {
+    Tensor3D input_error;
+    std::vector<Tensor3D> weight_grads;
+    std::vector<Tensor3D> bias_grads;
 };
 
 class Layer {
@@ -410,8 +437,9 @@ class DenseLayer : public Layer {
         Tensor3D d_activation;
         if (activation_function == "sigmoid") {
             d_activation = activation.apply(sigmoid_derivative);
+            // fixme these need to apply to the preactivations i.e. d_activaiton = pre_activation.apply
         } else if (activation_function == "relu") {
-            d_activation = activation.apply(relu_derivative));
+            d_activation = activation.apply(relu_derivative);
         } else if (activation_function == "softmax" or activation_function == "none") {
             // d_activation = d_activation
         } else {
@@ -473,7 +501,7 @@ class ConvolutionLayer : public Layer {
         for (int i = 0; i < out_channels; i++) {
             bias.push_back(0.0);
         }
-    }
+    }   
 
     /**
      * @brief Performs feedforward operation for this layer.
@@ -493,16 +521,10 @@ class ConvolutionLayer : public Layer {
 
         if (mode == "same") {
             Tensor3D padded_input = Tensor3D::pad(input);
-            pad_amount = (kernel_size - 1) / 2;
 
             for (int feature_map_index = 0; feature_map_index < weights.size(); ++feature_map_index) {
-                for (int y = pad_amount; y < input.height - pad_amount; ++y) {
-                    for (int x = pad_amount; x < input.width - pad_amount; ++x) {
-                        double z = input.dot_with_kernel_at_postion(weights[feature_map_index], x, y) + bias[feature_map_index];
-                        output.data[feature_map_index][y - pad_amount][x - pad_amount] = relu(z);
-                        // todo replace in the future with chosen activation function set by user
-                    }
-                }
+                output.data[feature_map_index] = (Tensor3D::Conv(padded_input, weights[feature_map_index]) + bias[feature_map_index]).apply(relu).data[0];
+
             }
 
         } else {
@@ -511,6 +533,8 @@ class ConvolutionLayer : public Layer {
 
         return output;
     }
+
+
 };
 
 class PoolingLayer : public Layer {
@@ -1192,8 +1216,13 @@ class NeuralNetwork {
 };
 
 // todo:
-// - dynamic input dimension calculation on layer addition to mitigate need to manually calculate input dimensions for each
-//   layer especially with partial window pooling
+// fix denselayer::backward
+// implement convolutionlayer::backward something like
+    // d_kernel = Tensor3D::Conv(input, d_z);        // Gradient w.r.t kernel
+    // d_bias = d_z.sum;               // Gradient w.r.t bias
+    // Tensor3D rotated_kernel = kernel.rotate_180(); // Rotate kernel 180 degrees
+    // Tensor3D d_input = Tensor3D::Conv(d_z.pad(kernel.height / 2), rotated_kernel); // Gradient w.r.t input
+
 
 // runner code
 int main() {
