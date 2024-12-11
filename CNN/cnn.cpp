@@ -376,12 +376,13 @@ struct BackwardReturn {
     std::vector<Tensor3D> bias_grads;
 };
 
+
 class Layer {
    public:
     virtual ~Layer() = default;
 
     // pure virtual class - requires implementation in derived objects.
-    virtual Tensor3D feedforward(const Tensor3D &input) = 0;
+    virtual Tensor3D forward(const Tensor3D &input) = 0;
 };
 
 class DenseLayer : public Layer {
@@ -389,7 +390,8 @@ class DenseLayer : public Layer {
     Tensor3D weights;
     Tensor3D bias;
     std::string activation_function;
-
+    Tensor3D input;
+    Tensor3D z;
 
     /**
      * @brief Constructs a DenseLayer object with specified input size, output size, and activation function.
@@ -408,72 +410,49 @@ class DenseLayer : public Layer {
         }
     }
 
-    /**
-     * @brief Performs feedforward operation for this layer.
-     * @param input The input matrix.
-     * @return The output matrix after applying the layer's transformation.
-     */
-    Tensor3D feedforward(const Tensor3D &input) override {
+    // returns post-activation - stores input and preactivation for backprop
+    Tensor3D forward(const Tensor3D &input) override {
         if (weights.width != input.height) {
             throw std::runtime_error(
-                "Input vector dimension is not appropriate for the weight matrix dimension, check input dimensions against layer "
-                "dimensions");
+                "Input vector dimension is not appropriate for the weight matrix dimension");
         }
-        Tensor3D z = weights * input + bias;
-        Tensor3D output(z.height, z.width);
+        
+        this->input = input;
+        z = weights * input + bias;
+        Tensor3D a;
+
+
         if (activation_function == "sigmoid") {
-            output = z.apply(sigmoid);
+            a = z.apply(sigmoid);
         } else if (activation_function == "relu") {
-            output = z.apply(relu);
+            a = z.apply(relu);
         } else if (activation_function == "softmax") {
-            output = z.softmax();
+            a = z.softmax(); 
         } else {
-            output = z;
+            a = z;
         }
-        return output;
+        
+        return a;
     }
 
-    BackwardReturn backward(const Tensor3D &d_output, const Tensor3D &input, const Tensor3D &activation) {
+    BackwardReturn backward(const Tensor3D &d_output) {
         Tensor3D d_activation;
         if (activation_function == "sigmoid") {
-            d_activation = activation.apply(sigmoid_derivative);
-            // fixme these need to apply to the preactivations i.e. d_activaiton = pre_activation.apply
+            d_activation = z.apply(sigmoid_derivative);
         } else if (activation_function == "relu") {
-            d_activation = activation.apply(relu_derivative);
+            d_activation = z.apply(relu_derivative);
         } else if (activation_function == "softmax" or activation_function == "none") {
-            // d_activation = d_activation
+            d_activation = d_output;  // derivative already included in loss function
         } else {
             throw std::runtime_error("Unsupported activation function");
         }
 
         Tensor3D d_z = d_output.hadamard(d_activation);
         Tensor3D d_input = weights.transpose() * d_z;
-        std::vector<Tensor3D> d_weights = {d_z * input.transpose()};    // technically a list for CNN layers where there are more than one kernel (set of weights)
-        std::vector<Tensor3D> d_bias = {d_z};   // same for bias
+        std::vector<Tensor3D> d_weights = {d_z * input.transpose()};
+        std::vector<Tensor3D> d_bias = {d_z};
 
         return {d_input, d_weights, d_bias};
-    }
-
-
-    /**
-     * @brief Performs feedforward operation for this layer and returns both output and pre-activation.
-     * @param input The input matrix.
-     * @return A vector containing the output matrix and pre-activation matrix.
-     */
-    std::vector<Tensor3D> feedforward_backprop(const Tensor3D &input) const {
-        Tensor3D z = weights * input + bias;
-        Tensor3D output(z.height, z.width);
-        if (activation_function == "sigmoid") {
-            output = z.apply(sigmoid);
-        } else if (activation_function == "relu") {
-            output = z.apply(relu);
-        } else if (activation_function == "softmax") {
-            output = z.softmax();
-        } else {
-            throw std::runtime_error("no activation function found for layer");
-        }
-
-        return {output, z};
     }
 };
 
@@ -486,6 +465,9 @@ class ConvolutionLayer : public Layer {
     int kernel_size;
     int stride;
     std::string mode;
+
+    Tensor3D input;
+    Tensor3D z;
 
     ConvolutionLayer(int channels_in, int out_channels, int kernel_size, int stride = 1, std::string mode = "same")
         : channels_in(channels_in), out_channels(out_channels), kernel_size(kernel_size), stride(stride), mode(mode) {
@@ -501,14 +483,10 @@ class ConvolutionLayer : public Layer {
         for (int i = 0; i < out_channels; i++) {
             bias.push_back(0.0);
         }
-    }   
+    }
 
-    /**
-     * @brief Performs feedforward operation for this layer.
-     * @param input The input tensor usually (x, y, RGB channel).
-     * @return The output tensor after applying the layer's transformation (x, y, output_feature_map)
-     */
-    Tensor3D feedforward(const Tensor3D &input) override {
+    // returns post-activation - stores input and preactivation for backprop
+    Tensor3D forward(const Tensor3D &input) override {
         if (input.depth != channels_in) {
             throw std::runtime_error("Input tensor depth does not match the number of input channels for this layer");
         }
@@ -516,25 +494,32 @@ class ConvolutionLayer : public Layer {
             throw std::runtime_error("Input tensor has zero height or width");
         }
 
-        Tensor3D output(weights.size(), input.height, input.width);
+        this->input = input;
+        Tensor3D a(weights.size(), input.height, input.width);
+        Tensor3D tmp_z(weights.size(), input.height, input.width);  // actual z attribute is not initialised to correct dimensions so use this and then copy to z
         int pad_amount = 0;
 
         if (mode == "same") {
             Tensor3D padded_input = Tensor3D::pad(input);
 
             for (int feature_map_index = 0; feature_map_index < weights.size(); ++feature_map_index) {
-                output.data[feature_map_index] = (Tensor3D::Conv(padded_input, weights[feature_map_index]) + bias[feature_map_index]).apply(relu).data[0];
+                Tensor3D preactivation = Tensor3D::Conv(padded_input, weights[feature_map_index]) + bias[feature_map_index];
 
+                // store the preactivation for this feature map
+                tmp_z.data[feature_map_index] = preactivation.data[0];
+
+                // apply the activation function and store the result for this feature map
+                a.data[feature_map_index] = preactivation.apply(relu).data[0];
             }
 
+            // copy tmp_z to z attribute
+            z = tmp_z;
+            return a;
+            
         } else {
             throw std::runtime_error("mode not specified or handled correctly");
         }
-
-        return output;
     }
-
-
 };
 
 class PoolingLayer : public Layer {
@@ -550,7 +535,7 @@ class PoolingLayer : public Layer {
         }
     }
 
-    Tensor3D feedforward(const Tensor3D &input) override {
+    Tensor3D forward(const Tensor3D &input) override {
         // calculate output dimensions including partial window pooling
         int new_height = std::ceil((input.height - kernel_size) / stride + 1);
         int new_width = std::ceil((input.width - kernel_size) / stride + 1);
@@ -632,387 +617,6 @@ class MSELoss : public Loss {
         return (predicted - target) * (1.0 / predicted.width);
     }
 };
-
-// -----------------------------------------------------------------------------------------------------
-// ---------------------------------------- OPTIMISERS -------------------------------------------------
-
-// base Optimiser class
-class Optimiser {
-   public:
-    /**
-     * @brief Computes and applies updates to the network layers based on gradients.
-     * @param layers The layers of the neural network to update.
-     * @param gradients The gradients used for updating the layers.
-     */
-    virtual void compute_and_apply_updates(std::vector<DenseLayer> &layers,
-                                           const std::vector<std::vector<Tensor3D>> &gradients) = 0;
-
-    /**
-     * @brief Virtual destructor for the Optimiser class.
-     */
-    virtual ~Optimiser() = default;
-
-    struct GradientResult {
-        std::vector<std::vector<Tensor3D>>
-            gradients;                  // list of layers, each layer has a list of weight and bias gradient matrices
-        Tensor3D input_layer_gradient;  // gradient of the input layer - for more general use as parts of bigger architectures
-        Tensor3D output;                // output of the network
-    };
-
-    /**
-     * @brief Calculates gradients for a single example.
-     * @param layers The layers of the neural network.
-     * @param input The input matrix.
-     * @param target The target matrix.
-     * @return A GradientResult struct containing gradients, input errors, and the output of the network.
-     */
-    virtual GradientResult calculate_gradient(const std::vector<DenseLayer> &layers, const Tensor3D &input,
-                                              const Tensor3D &target, const Loss &loss) {
-        // forward pass
-        std::vector<Tensor3D> activations = {input};
-        std::vector<Tensor3D> preactivations = {input};
-
-        for (const auto &layer : layers) {
-            auto results = layer.feedforward_backprop(activations.back());
-            activations.push_back(results[0]);
-            preactivations.push_back(results[1]);
-        }
-
-        // backward pass
-        int num_layers = layers.size();
-        std::vector<Tensor3D> deltas;
-        deltas.reserve(num_layers);
-
-        // output layer error (δ^L = ∇_a C ⊙ σ'(z^L))
-        Tensor3D output_delta = loss.derivative(activations.back(), target);
-        if (layers.back().activation_function == "sigmoid") {
-            output_delta = output_delta.hadamard(preactivations.back().apply(sigmoid_derivative));
-        } else if (layers.back().activation_function == "relu") {
-            output_delta = output_delta.hadamard(preactivations.back().apply(relu_derivative));
-        } else if (layers.back().activation_function == "softmax" or layers.back().activation_function == "none") {
-            // for softmax and none, the delta is already correct (assuming cross-entropy loss)
-        } else {
-            throw std::runtime_error("Unsupported activation function");
-        }
-        deltas.push_back(output_delta);
-
-        // hidden layer errors (δ^l = ((w^(l+1))^T δ^(l+1)) ⊙ σ'(z^l))
-        for (int l = num_layers - 2; l >= 0; --l) {
-            Tensor3D delta = (layers[l + 1].weights.transpose() * deltas.back());
-            if (layers[l].activation_function == "sigmoid") {
-                delta = delta.hadamard(preactivations[l + 1].apply(sigmoid_derivative));
-            } else if (layers[l].activation_function == "relu") {
-                delta = delta.hadamard(preactivations[l + 1].apply(relu_derivative));
-            } else if (layers[l].activation_function == "none") {
-                // delta = delta
-            } else {
-                throw std::runtime_error("Unsupported activation function");
-            }
-            deltas.push_back(delta);
-        }
-
-        // reverse deltas to match layer order
-        std::reverse(deltas.begin(), deltas.end());
-
-        // calculate gradients
-        std::vector<std::vector<Tensor3D>> gradients;
-        for (int l = 0; l < num_layers; ++l) {
-            Tensor3D weight_gradient = deltas[l] * activations[l].transpose();
-            gradients.push_back({weight_gradient, deltas[l]});
-        }
-
-        // return a GradientResult struct for purposes of tracking loss
-        return {gradients, deltas.front(), activations.back()};
-    }
-
-    /**
-     * @brief Averages gradients from multiple examples.
-     * @param batch_gradients A vector of gradients from multiple examples.
-     * @return The averaged gradients.
-     */
-    std::vector<std::vector<Tensor3D>> average_gradients(const std::vector<std::vector<std::vector<Tensor3D>>> &batch_gradients) {
-        std::vector<std::vector<Tensor3D>> avg_gradients;
-        size_t num_layers = batch_gradients[0].size();
-        size_t batch_size = batch_gradients.size();
-
-        for (size_t l = 0; l < num_layers; ++l) {
-            Tensor3D avg_weight_grad(batch_gradients[0][l][0].height, batch_gradients[0][l][0].width);
-            Tensor3D avg_bias_grad(batch_gradients[0][l][1].height, batch_gradients[0][l][1].width);
-
-            for (const auto &example_gradients : batch_gradients) {
-                avg_weight_grad = avg_weight_grad + example_gradients[l][0];
-                avg_bias_grad = avg_bias_grad + example_gradients[l][1];
-            }
-
-            avg_weight_grad = avg_weight_grad * (1.0 / batch_size);
-            avg_bias_grad = avg_bias_grad * (1.0 / batch_size);
-
-            avg_gradients.push_back({avg_weight_grad, avg_bias_grad});
-        }
-
-        return avg_gradients;
-    }
-};
-
-class SGDOptimiser : public Optimiser {
-   private:
-    double learning_rate;
-    std::vector<std::vector<Tensor3D>> velocity;
-
-   public:
-    /**
-     * @brief Constructs an SGDOptimiser object with the specified learning rate.
-     * @param lr The learning rate (default: 0.1).
-     */
-    SGDOptimiser(double lr = 0.1) : learning_rate(lr) {}
-
-    /**
-     * @brief initialises the velocity vectors for SGD optimization.
-     * @param layers The layers of the neural network.
-     */
-    void initialise_velocity(const std::vector<DenseLayer> &layers) {
-        velocity.clear();
-        for (const auto &layer : layers) {
-            velocity.push_back(
-                {Tensor3D(layer.weights.height, layer.weights.width), Tensor3D(layer.bias.height, layer.bias.width)});
-        }
-    }
-
-    /**
-     * @brief Computes and applies updates using Stochastic Gradient Descent.
-     * @param layers The layers of the neural network to update.
-     * @param gradients The gradients used for updating the layers.
-     */
-    void compute_and_apply_updates(std::vector<DenseLayer> &layers,
-                                   const std::vector<std::vector<Tensor3D>> &gradients) override {
-        if (velocity.empty()) {
-            initialise_velocity(layers);
-        }
-
-        // compute and apply updates
-        for (size_t l = 0; l < layers.size(); ++l) {
-            for (int i = 0; i < 2; ++i) {  // 0 for weights, 1 for biases
-                // compute adjustment
-                velocity[l][i] = gradients[l][i] * -learning_rate;
-            }
-            // apply adjustment
-            layers[l].weights = layers[l].weights + velocity[l][0];
-            layers[l].bias = layers[l].bias + velocity[l][1];
-        }
-    }
-};
-
-class SGDMomentumOptimiser : public Optimiser {
-   private:
-    double learning_rate;
-    double momentum;
-    std::vector<std::vector<Tensor3D>> velocity;
-
-   public:
-    /**
-     * @brief Constructs an SGDMomentumOptimiser object with the specified learning rate and momentum.
-     * @param lr The learning rate (default: 0.1).
-     * @param mom The momentum coefficient (default: 0.9).
-     */
-    SGDMomentumOptimiser(double lr = 0.1, double mom = 0.9) : learning_rate(lr), momentum(mom) {}
-
-    /**
-     * @brief initialises the velocity vectors for SGD with Momentum optimization.
-     * @param layers The layers of the neural network.
-     */
-    void initialise_velocity(const std::vector<DenseLayer> &layers) {
-        velocity.clear();
-        for (const auto &layer : layers) {
-            velocity.push_back(
-                {Tensor3D(layer.weights.height, layer.weights.width), Tensor3D(layer.bias.height, layer.bias.width)});
-        }
-    }
-
-    /**
-     * @brief Computes and applies updates using Stochastic Gradient Descent with Momentum.
-     * @param layers The layers of the neural network to update.
-     * @param gradients The gradients used for updating the layers.
-     */
-    void compute_and_apply_updates(std::vector<DenseLayer> &layers,
-                                   const std::vector<std::vector<Tensor3D>> &gradients) override {
-        if (velocity.empty()) {
-            initialise_velocity(layers);
-        }
-
-        // compute updates
-        for (size_t l = 0; l < layers.size(); ++l) {
-            for (int i = 0; i < 2; ++i) {  // 0 for weights, 1 for biases
-                // compute adjustments
-                velocity[l][i] = (velocity[l][i] * momentum) - (gradients[l][i] * learning_rate);
-            }
-            // apply adjustments
-            layers[l].weights = layers[l].weights + velocity[l][0];
-            layers[l].bias = layers[l].bias + velocity[l][1];
-        }
-    }
-};
-
-class AdamOptimiser : public Optimiser {
-   private:
-    double learning_rate;
-    double beta1;
-    double beta2;
-    double epsilon;
-    int t;                                 // timestep
-    std::vector<std::vector<Tensor3D>> m;  // first moment
-    std::vector<std::vector<Tensor3D>> v;  // second moment
-
-   public:
-    /**
-     * @brief Constructs an AdamOptimiser object with the specified parameters.
-     * @param lr The learning rate (default: 0.001).
-     * @param b1 The beta1 parameter (default: 0.9).
-     * @param b2 The beta2 parameter (default: 0.999).
-     * @param eps The epsilon parameter for numerical stability (default: 1e-8).
-     */
-    AdamOptimiser(double lr = 0.001, double b1 = 0.9, double b2 = 0.999, double eps = 1e-8)
-        : learning_rate(lr), beta1(b1), beta2(b2), epsilon(eps), t(0) {}
-
-    /**
-     * @brief initialises the first and second moment vectors for Adam optimization.
-     * @param layers The layers of the neural network.
-     */
-    void initialise_moments(const std::vector<DenseLayer> &layers) {
-        m.clear();
-        v.clear();
-        m.reserve(layers.size());
-        v.reserve(layers.size());
-        for (const auto &layer : layers) {
-            m.push_back({Tensor3D(layer.weights.height, layer.weights.width), Tensor3D(layer.bias.height, layer.bias.width)});
-            v.push_back({Tensor3D(layer.weights.height, layer.weights.width), Tensor3D(layer.bias.height, layer.bias.width)});
-        }
-    }
-
-    /**
-     * @brief Computes and applies updates using the Adam optimization algorithm.
-     * @param layers The layers of the neural network to update.
-     * @param gradients The gradients used for updating the layers.
-     */
-    void compute_and_apply_updates(std::vector<DenseLayer> &layers,
-                                   const std::vector<std::vector<Tensor3D>> &gradients) override {
-        if (m.empty() or v.empty()) {
-            initialise_moments(layers);
-        }
-
-        t++;  // increment timestep
-
-        for (size_t l = 0; l < layers.size(); ++l) {
-            for (int i = 0; i < 2; ++i) {  // 0 for weights, 1 for biases
-                // update biased first moment estimate
-                m[l][i] = m[l][i] * beta1 + gradients[l][i] * (1.0 - beta1);
-
-                // update biased second raw moment estimate
-                v[l][i] = v[l][i] * beta2 + gradients[l][i].hadamard(gradients[l][i]) * (1.0 - beta2);
-
-                // compute bias-corrected first moment estimate
-                Tensor3D m_hat = m[l][i] * (1.0 / (1.0 - std::pow(beta1, t)));
-
-                // compute bias-corrected second raw moment estimate
-                Tensor3D v_hat = v[l][i] * (1.0 / (1.0 - std::pow(beta2, t)));
-
-                // compute the update
-                Tensor3D update = m_hat.hadamard(v_hat.apply([this](double x) { return 1.0 / (std::sqrt(x) + epsilon); }));
-
-                // apply the update
-                if (i == 0) {
-                    layers[l].weights = layers[l].weights - update * learning_rate;
-                } else {
-                    layers[l].bias = layers[l].bias - update * learning_rate;
-                }
-            }
-        }
-    }
-};
-
-class AdamWOptimiser : public Optimiser {
-   private:
-    double learning_rate;
-    double beta1;
-    double beta2;
-    double epsilon;
-    double weight_decay;
-    int t;                                 // timestep
-    std::vector<std::vector<Tensor3D>> m;  // first moment
-    std::vector<std::vector<Tensor3D>> v;  // second moment
-
-   public:
-    /**
-     * @brief Constructs an AdamWOptimiser object with the specified parameters.
-     * @param lr The learning rate (default: 0.001).
-     * @param b1 The beta1 parameter (default: 0.9).
-     * @param b2 The beta2 parameter (default: 0.999).
-     * @param eps The epsilon parameter for numerical stability (default: 1e-8).
-     * @param wd The weight decay parameter (default: 0.01).
-     */
-    AdamWOptimiser(double lr = 0.001, double b1 = 0.9, double b2 = 0.999, double eps = 1e-8, double wd = 0.01)
-        : learning_rate(lr), beta1(b1), beta2(b2), epsilon(eps), weight_decay(wd), t(0) {}
-
-    /**
-     * @brief initialises the first and second moment vectors for AdamW optimization.
-     * @param layers The layers of the neural network.
-     */
-    void initialise_moments(const std::vector<DenseLayer> &layers) {
-        m.clear();
-        v.clear();
-        m.reserve(layers.size());
-        v.reserve(layers.size());
-        for (const auto &layer : layers) {
-            m.push_back({Tensor3D(layer.weights.height, layer.weights.width), Tensor3D(layer.bias.height, layer.bias.width)});
-            v.push_back({Tensor3D(layer.weights.height, layer.weights.width), Tensor3D(layer.bias.height, layer.bias.width)});
-        }
-    }
-
-    /**
-     * @brief Computes and applies updates using the AdamW optimization algorithm.
-     * @param layers The layers of the neural network to update.
-     * @param gradients The gradients used for updating the layers.
-     */
-    void compute_and_apply_updates(std::vector<DenseLayer> &layers,
-                                   const std::vector<std::vector<Tensor3D>> &gradients) override {
-        if (m.empty() || v.empty()) {
-            initialise_moments(layers);
-        }
-
-        t++;  // increment timestep
-
-        for (size_t l = 0; l < layers.size(); ++l) {
-            for (int i = 0; i < 2; ++i) {  // 0 for weights, 1 for biases
-                // update biased first moment estimate
-                m[l][i] = m[l][i] * beta1 + gradients[l][i] * (1.0 - beta1);
-
-                // update biased second raw moment estimate
-                v[l][i] = v[l][i] * beta2 + gradients[l][i].hadamard(gradients[l][i]) * (1.0 - beta2);
-
-                // compute bias-corrected first moment estimate
-                Tensor3D m_hat = m[l][i] * (1.0 / (1.0 - std::pow(beta1, t)));
-
-                // compute bias-corrected second raw moment estimate
-                Tensor3D v_hat = v[l][i] * (1.0 / (1.0 - std::pow(beta2, t)));
-
-                // compute the Adam update
-                Tensor3D update = m_hat.hadamard(v_hat.apply([this](double x) { return 1.0 / (std::sqrt(x) + epsilon); }));
-
-                // apply the update
-                if (i == 0) {  // for weights
-                    // apply weight decay
-                    layers[l].weights = layers[l].weights * (1.0 - learning_rate * weight_decay);
-                    // apply Adam update
-                    layers[l].weights = layers[l].weights - (update * learning_rate);
-                } else {  // for biases
-                    // biases typically don't use weight decay
-                    layers[l].bias = layers[l].bias - update * learning_rate;
-                }
-            }
-        }
-    }
-};
-
-// -----------------------------------------------------------------------------------------------------
 
 class NeuralNetwork {
    private:
@@ -1107,7 +711,7 @@ class NeuralNetwork {
    public:
     std::vector<LayerSpec> layer_specs;
     std::vector<std::unique_ptr<Layer>> layers;
-    std::unique_ptr<Optimiser> optimiser;
+    // std::unique_ptr<Optimiser> optimiser;
     std::unique_ptr<Loss> loss;
     bool layers_created = false;
 
@@ -1151,7 +755,7 @@ class NeuralNetwork {
      * @brief Sets the optimiser for the neural network.
      * @param new_optimiser A unique pointer to the new Optimiser object.
      */
-    void set_optimiser(std::unique_ptr<Optimiser> new_optimiser) { optimiser = std::move(new_optimiser); }
+    // void set_optimiser(std::unique_ptr<Optimiser> new_optimiser) { optimiser = std::move(new_optimiser); }
 
     /**
      * @brief Sets the loss function for the neural network.
@@ -1189,14 +793,14 @@ class NeuralNetwork {
 
             // handle transitions
             if (current_conv) {
-                current = current_conv->feedforward(current);
+                current = current_conv->forward(current);
 
                 // if next layer is dense, we need to flatten to (1, N, 1) where N is total elements
                 if (next_dense) {
                     current = current.flatten();
                 }
             } else if (current_pooling) {
-                current = current_pooling->feedforward(current);
+                current = current_pooling->forward(current);
 
                 // if next layer is dense, we need to flatten to (1, N, 1) where N is total elements
                 if (next_dense) {
@@ -1206,7 +810,7 @@ class NeuralNetwork {
                 if (next_pooling or next_conv) {
                     throw std::runtime_error("dense layer cannot be followed by a pooling or convolution layer");
                 }
-                current = current_dense->feedforward(current);
+                current = current_dense->forward(current);
             } else {
                 throw std::runtime_error("unknown layer type encountered");
             }
@@ -1216,7 +820,6 @@ class NeuralNetwork {
 };
 
 // todo:
-// fix denselayer::backward
 // implement convolutionlayer::backward something like
     // d_kernel = Tensor3D::Conv(input, d_z);        // Gradient w.r.t kernel
     // d_bias = d_z.sum;               // Gradient w.r.t bias
