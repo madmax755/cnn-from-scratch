@@ -546,6 +546,92 @@ class ConvolutionLayer : public Layer {
         }
     }
 
+    BackwardReturn backward(const Tensor3D &d_output) {
+        // first compute d_z by applying relu derivative
+        Tensor3D d_z = d_output.hadamard(z.apply(relu_derivative));
+
+        // initialise gradient tensors
+        std::vector<Tensor3D> d_weights;
+        std::vector<Tensor3D> d_bias;
+        d_weights.reserve(out_channels);
+        d_bias.reserve(out_channels);
+
+        // pad d_z for later computation of d_input
+        Tensor3D padded_error = Tensor3D::pad(d_z);
+
+        // compute gradients for each output channel
+        for (int out_c = 0; out_c < out_channels; out_c++) {
+            // extract this output channel's gradient
+            Tensor3D channel_d_z(1, d_z.height, d_z.width);
+            channel_d_z.data[0] = d_z.data[out_c];
+            
+            // initialise kernel gradient for this output channel
+            Tensor3D d_kernel(channels_in, kernel_size, kernel_size);
+            
+            // compute gradient for each input channel's kernel
+            for (int in_c = 0; in_c < channels_in; in_c++) {
+                // extract this input channel
+                Tensor3D channel_input(1, input.height, input.width);
+                channel_input.data[0] = input.data[in_c];
+                
+                // compute gradient for this input-output channel pair
+                Tensor3D channel_grad = Tensor3D::Conv(channel_input, channel_d_z);
+                d_kernel.data[in_c] = channel_grad.data[0];
+            }
+            d_weights.push_back(d_kernel);
+            
+            // compute d_bias for this output channel (sum of d_z)
+            double channel_d_bias = 0.0;
+            for (size_t h = 0; h < d_z.height; h++) {
+                for (size_t w = 0; w < d_z.width; w++) {
+                    channel_d_bias += d_z.data[out_c][h][w];
+                }
+            }
+            Tensor3D bias_grad(1, 1, 1);
+            bias_grad.data[0][0][0] = channel_d_bias;
+            d_bias.push_back(bias_grad);
+        }
+
+        // compute d_input
+
+        Tensor3D d_input(input.depth, input.height, input.width);
+        Tensor3D relevant_d_z_slice(1, d_z.height, d_z.width);
+        Tensor3D relevant_kernel_slice(1, weights[0].height, weights[0].width);
+
+        for (int in_ch = 0; in_ch < weights[0].depth; in_ch++) {
+            // sum contributions from all output channels
+            for (int k = 0; k < weights.size(); k++) {
+                
+                // extract relevant delta channel to relevant_d_z_slice
+                for (int y = 0; y < d_z.height; y++) {
+                    for (int x = 0; x < d_z.width; x++) {
+                        relevant_d_z_slice.data[0][y][x] = d_z.data[k][y][x];
+                    }
+                }
+
+                // extract and rotate relevant kernel slice to relevant_kernel_slice
+                for (int y = 0; y < weights[0].height; y++) {
+                    for (int x = 0; x < weights[0].width; x++) {
+                        // rotate 180 degrees by inverting indices
+                        relevant_kernel_slice.data[0][y][x] = 
+                            weights[k].data[in_ch][weights[0].height-1-y][weights[0].width-1-x];
+                    }
+                }
+                
+                // Conv function will handle 'same' padding internally
+                Tensor3D d_input_contribution = Tensor3D::Conv(relevant_d_z_slice, relevant_kernel_slice);
+
+                // add the contribution of this kernel to this input channel's d_input layer
+                for (int y = 0; y < d_input_contribution.height; y++) {
+                    for (int x = 0; x < d_input_contribution.width; x++) {
+                        d_input.data[in_ch][y][x] += d_input_contribution.data[0][y][x];
+                    }
+                }
+            }
+        }
+
+        return {d_input, d_weights, d_bias};
+    }
 };
 
 class PoolingLayer : public Layer {
