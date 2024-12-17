@@ -355,18 +355,45 @@ class Tensor3D {
         return result;
     }
 
-    static Tensor3D Conv(const Tensor3D &big, const Tensor3D &small) {
-        // todo add error checking for dimensions
+    static Tensor3D Conv(const Tensor3D &input, const Tensor3D &kernel) {
+        // check dimensions
+        if (input.depth != kernel.depth) {
+            throw std::runtime_error("input and kernel must have same depth for convolution");
+        }
 
-        int pad_amount = (small.height - 1) / 2;
-        Tensor3D output(big.height - pad_amount, big.width - pad_amount);
+        int pad_amount = (kernel.height - 1) / 2;
+        Tensor3D output(1, input.height - pad_amount * 2, input.width - pad_amount * 2);
 
-        for (int y = pad_amount; y < big.height - pad_amount; ++y) {
-            for (int x = pad_amount; x < big.width - pad_amount; ++x) {
-                output.data[0][y - pad_amount][x - pad_amount] = big.dot_with_kernel_at_postion(small, x, y);
+        // for each position in the output
+        for (int y = pad_amount; y < input.height - pad_amount; ++y) {
+            for (int x = pad_amount; x < input.width - pad_amount; ++x) {
+                double sum = 0.0;
+                
+                // sum over all channels and kernel positions
+                for (int d = 0; d < input.depth; ++d) {
+                    for (int ky = 0; ky < kernel.height; ++ky) {
+                        for (int kx = 0; kx < kernel.width; ++kx) {
+                            sum += input.data[d][y + ky - pad_amount][x + kx - pad_amount] * 
+                                  kernel.data[d][ky][kx];
+                        }
+                    }
+                }
+                output.data[0][y - pad_amount][x - pad_amount] = sum;
             }
         }
         return output;
+    }
+
+    Tensor3D rotate_180() const {
+        Tensor3D result(depth, height, width);
+        for (size_t d = 0; d < depth; d++) {
+            for (size_t h = 0; h < height; h++) {
+                for (size_t w = 0; w < width; w++) {
+                    result.data[d][height - 1 - h][width - 1 - w] = data[d][h][w];
+                }
+            }
+        }
+        return result;
     }
 };
 
@@ -375,7 +402,6 @@ struct BackwardReturn {
     std::vector<Tensor3D> weight_grads;
     std::vector<Tensor3D> bias_grads;
 };
-
 
 class Layer {
    public:
@@ -463,14 +489,13 @@ class ConvolutionLayer : public Layer {
     int channels_in;
     int out_channels;
     int kernel_size;
-    int stride;
     std::string mode;
 
     Tensor3D input;
     Tensor3D z;
 
-    ConvolutionLayer(int channels_in, int out_channels, int kernel_size, int stride = 1, std::string mode = "same")
-        : channels_in(channels_in), out_channels(out_channels), kernel_size(kernel_size), stride(stride), mode(mode) {
+    ConvolutionLayer(int channels_in, int out_channels, int kernel_size, std::string mode = "same")
+        : channels_in(channels_in), out_channels(out_channels), kernel_size(kernel_size), mode(mode) {
         // creates a list of kernel tensors - one for each output channel
         weights.reserve(out_channels);
         for (int i = 0; i < out_channels; i++) {
@@ -520,6 +545,7 @@ class ConvolutionLayer : public Layer {
             throw std::runtime_error("mode not specified or handled correctly");
         }
     }
+
 };
 
 class PoolingLayer : public Layer {
@@ -627,7 +653,6 @@ class NeuralNetwork {
         int in_channels = 0;
         int out_channels = 0;
         int kernel_size = 0;
-        int stride = 1;
         std::string mode = "same";
 
         // pool parameters
@@ -639,12 +664,11 @@ class NeuralNetwork {
         std::string activation = "relu";
         size_t output_size = 0;
 
-        static LayerSpec Conv(int out_channels, int kernel_size, int stride = 1, std::string mode = "same") {
+        static LayerSpec Conv(int out_channels, int kernel_size, std::string mode = "same") {
             LayerSpec spec;
             spec.type = CONV;
             spec.out_channels = out_channels;
             spec.kernel_size = kernel_size;
-            spec.stride = stride;
             spec.mode = mode;
             return spec;
         }
@@ -682,9 +706,9 @@ class NeuralNetwork {
                 case LayerSpec::CONV: {
                     spec.in_channels = dims.depth;
                     layers.push_back(std::make_unique<ConvolutionLayer>(spec.in_channels, spec.out_channels, spec.kernel_size,
-                                                                        spec.stride, spec.mode));
+                                                                        spec.mode));
                     
-                    // change dims.width and dims.height here if ever put more modes than same
+                    // todo change dims.width and dims.height here if ever put more modes than same
 
                     dims.depth = spec.out_channels;
                     break;
@@ -739,8 +763,8 @@ class NeuralNetwork {
     NeuralNetwork() {}
 
     // user-facing funcs to add layers (just adds their specs to layer_specs to be created with correct input dimensions later)
-    void add_conv_layer(int out_channels, int kernel_size, int stride = 1, std::string mode = "same") {
-        layer_specs.push_back(LayerSpec::Conv(out_channels, kernel_size, stride, mode));
+    void add_conv_layer(int out_channels, int kernel_size, std::string mode = "same") {
+        layer_specs.push_back(LayerSpec::Conv(out_channels, kernel_size, mode));
     }
 
     void add_pool_layer(int pool_size = 2, int stride = -1, std::string mode = "max") {
@@ -826,6 +850,9 @@ class NeuralNetwork {
     // Tensor3D rotated_kernel = kernel.rotate_180(); // Rotate kernel 180 degrees
     // Tensor3D d_input = Tensor3D::Conv(d_z.pad(kernel.height / 2), rotated_kernel); // Gradient w.r.t input
 
+// implement other modes than same
+// implement different strides in convlayer
+// change to float values in Tensor3D
 
 // runner code
 int main() {
