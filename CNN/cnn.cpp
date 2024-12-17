@@ -56,7 +56,7 @@ class Tensor3D {
 
     Tensor3D() : height(0), width(0), depth(0) {}
 
-    // for compatability with old matrix code
+    // for compatability with old Tensor3D code
     Tensor3D(size_t rows, size_t cols) : depth(1), height(rows), width(cols) {
         data.resize(depth, std::vector<std::vector<double>>(height, std::vector<double>(width, 0.0)));
     }
@@ -163,12 +163,12 @@ class Tensor3D {
     // operators
 
     /**
-     * @brief Overloads the multiplication operator for matrix multiplication on each depth slice.
+     * @brief Overloads the multiplication operator for Tensor3D multiplication on each depth slice.
      * @param other The tensor to multiply with.
      * @return The resulting tensor after multiplication.
      */
     Tensor3D operator*(const Tensor3D &other) const {
-        // check dimensions match for matrix multiplication at each depth
+        // check dimensions match for Tensor3D multiplication at each depth
         if (width != other.height) {
             throw std::invalid_argument("tensor dimensions don't match for multiplication: (" + std::to_string(height) + "x" +
                                         std::to_string(width) + "x" + std::to_string(depth) + ") * (" +
@@ -182,7 +182,7 @@ class Tensor3D {
         // result will have dimensions: (this.height x other.width x depth)
         Tensor3D result(depth, height, other.width);
 
-        // perform matrix multiplication for each depth slice
+        // perform Tensor3D multiplication for each depth slice
         for (size_t d = 0; d < depth; d++) {
             // cache-friendly loop order (k before j)
             for (size_t i = 0; i < height; i++) {
@@ -306,15 +306,15 @@ class Tensor3D {
         return result;
     }
 
-    // softmax across width dimension for back-compatibility with old matrix class
+    // softmax across width dimension for back-compatibility with old Tensor3D class
     Tensor3D softmax() const {
         Tensor3D result(depth, height, width);
 
         for (size_t d = 0; d < depth; d++) {
-            for (size_t w = 0; w < width; w++) {  // equivalent to "columns" in matrix
+            for (size_t w = 0; w < width; w++) {  // equivalent to "columns" in Tensor3D
                 // find max
                 double max_val = -std::numeric_limits<double>::infinity();
-                for (size_t h = 0; h < height; h++) {  // equivalent to "rows" in matrix
+                for (size_t h = 0; h < height; h++) {  // equivalent to "rows" in Tensor3D
                     max_val = std::max(max_val, data[d][h][w]);
                 }
 
@@ -420,20 +420,20 @@ class Tensor3D {
         if (depth_index >= depth) {
             throw std::runtime_error("depth_index out of range in get_depth_slice");
         }
-        
+
         Tensor3D slice(1, height, width);
         slice.data[0] = data[depth_index];
         return slice;
     }
 
-    void set_depth_slice(size_t depth_index, const Tensor3D& slice) {
+    void set_depth_slice(size_t depth_index, const Tensor3D &slice) {
         if (depth_index >= depth) {
             throw std::runtime_error("depth_index out of range in set_depth_slice");
         }
         if (slice.depth != 1 || slice.height != height || slice.width != width) {
             throw std::runtime_error("slice dimensions don't match in set_depth_slice");
         }
-        
+
         data[depth_index] = slice.data[0];
     }
 };
@@ -444,6 +444,7 @@ struct BackwardReturn {
     std::vector<Tensor3D> bias_grads;
 };
 
+// ---------------------------------- LAYER CLASSES -------------------------------------------
 class Layer {
    public:
     virtual ~Layer() = default;
@@ -455,8 +456,8 @@ class Layer {
 
 class DenseLayer : public Layer {
    public:
-    Tensor3D weights;
-    Tensor3D bias;
+    std::vector<Tensor3D> weights;  // only a list for compatibility with other layer types - one element
+    std::vector<Tensor3D> bias;     // only a list for compatibility with other layer types - one element
     std::string activation_function;
     Tensor3D input;
     Tensor3D z;
@@ -468,24 +469,28 @@ class DenseLayer : public Layer {
      * @param activation_function The activation function to use (default: "sigmoid").
      */
     DenseLayer(size_t input_size, size_t output_size, std::string activation_function = "relu")
-        : weights(output_size, input_size), bias(output_size, 1), activation_function(activation_function) {
+        : activation_function(activation_function) {
+    
+        weights.emplace_back(output_size, input_size);
+        bias.emplace_back(output_size, 1);
+
         if (activation_function == "sigmoid") {
-            weights.xavier_initialise();
+            weights[0].xavier_initialise();
         } else if (activation_function == "relu") {
-            weights.he_initialise();
+            weights[0].he_initialise();
         } else {
-            weights.uniform_initialise();
+            weights[0].uniform_initialise();
         }
     }
 
     // returns post-activation - stores input and preactivation for backprop
     Tensor3D forward(const Tensor3D &input) override {
-        if (weights.width != input.height) {
-            throw std::runtime_error("Input vector dimension is not appropriate for the weight matrix dimension");
+        if (weights[0].width != input.height) {
+            throw std::runtime_error("Input vector dimension is not appropriate for the weight Tensor3D dimension");
         }
 
         this->input = input;
-        z = weights * input + bias;
+        z = weights[0] * input + bias[0];
         Tensor3D a;
 
         if (activation_function == "sigmoid") {
@@ -514,7 +519,7 @@ class DenseLayer : public Layer {
         }
 
         Tensor3D d_z = d_output.hadamard(d_activation);
-        Tensor3D d_input = weights.transpose() * d_z;
+        Tensor3D d_input = weights[0].transpose() * d_z;
         std::vector<Tensor3D> d_weights = {d_z * input.transpose()};
         std::vector<Tensor3D> d_bias = {d_z};
 
@@ -610,7 +615,7 @@ class ConvolutionLayer : public Layer {
                 // extract relevant delta channel and kernel slice
                 Tensor3D relevant_d_z_slice = padded_d_output.get_depth_slice(k);
                 Tensor3D relevant_kernel_slice = weights[k].get_depth_slice(in_ch).rotate_180();
-                
+
                 // perform full convolution
                 Tensor3D d_input_contribution = Tensor3D::Conv(relevant_d_z_slice, relevant_kernel_slice);
 
@@ -626,21 +631,21 @@ class ConvolutionLayer : public Layer {
         // compute weight gradients
         for (int k = 0; k < weights.size(); k++) {
             Tensor3D d_weight(input.depth, kernel_size, kernel_size);
-            
+
             // pad input for full convolution
             Tensor3D padded_input = Tensor3D::pad(input, pad_amount);
-            
+
             for (int in_ch = 0; in_ch < input.depth; in_ch++) {
                 // extract relevant input and gradient channels
                 Tensor3D input_channel = padded_input.get_depth_slice(in_ch);
                 Tensor3D d_output_channel = d_output.get_depth_slice(k);
-                
+
                 // compute gradient for this input-output channel pair
                 Tensor3D channel_grad = Tensor3D::Conv(input_channel, d_output_channel);
                 d_weight.set_depth_slice(in_ch, channel_grad);
             }
             d_weights.push_back(d_weight);
-            
+
             // compute bias gradient (sum of d_output)
             double d_bias_val = 0.0;
             for (int y = 0; y < d_output.height; y++) {
@@ -761,6 +766,7 @@ class PoolingLayer : public Layer {
     }
 };
 
+// ---------------------------------- LOSS FUNCTIONS -------------------------------------------
 class Loss {
    public:
     virtual ~Loss() = default;
@@ -809,6 +815,9 @@ class MSELoss : public Loss {
     }
 };
 
+// ---------------------------------- OPTIMISERS -------------------------------------------
+
+// ---------------------------------- NEURAL NETWORK -------------------------------------------
 class NeuralNetwork {
    private:
     struct LayerSpec {
@@ -934,8 +943,8 @@ class NeuralNetwork {
 
     /**
      * @brief Performs feedforward operation through all layers of the network.
-     * @param input The input matrix.
-     * @return The output matrix after passing through all layers.
+     * @param input The input Tensor3D.
+     * @return The output Tensor3D after passing through all layers.
      */
     Tensor3D feedforward(const Tensor3D &input) {
         Tensor3D current = input;
