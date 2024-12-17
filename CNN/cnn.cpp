@@ -447,6 +447,8 @@ struct BackwardReturn {
 // ---------------------------------- LAYER CLASSES -------------------------------------------
 class Layer {
    public:
+    std::vector<Tensor3D> weights;
+    std::vector<Tensor3D> biases;
     virtual ~Layer() = default;
 
     // pure virtual class - requires implementation in derived objects.
@@ -456,8 +458,6 @@ class Layer {
 
 class DenseLayer : public Layer {
    public:
-    std::vector<Tensor3D> weights;  // only a list for compatibility with other layer types - one element
-    std::vector<Tensor3D> bias;     // only a list for compatibility with other layer types - one element
     std::string activation_function;
     Tensor3D input;
     Tensor3D z;
@@ -470,9 +470,8 @@ class DenseLayer : public Layer {
      */
     DenseLayer(size_t input_size, size_t output_size, std::string activation_function = "relu")
         : activation_function(activation_function) {
-    
         weights.emplace_back(output_size, input_size);
-        bias.emplace_back(output_size, 1);
+        biases.emplace_back(output_size, 1);
 
         if (activation_function == "sigmoid") {
             weights[0].xavier_initialise();
@@ -490,7 +489,7 @@ class DenseLayer : public Layer {
         }
 
         this->input = input;
-        z = weights[0] * input + bias[0];
+        z = weights[0] * input + biases[0];
         Tensor3D a;
 
         if (activation_function == "sigmoid") {
@@ -521,16 +520,14 @@ class DenseLayer : public Layer {
         Tensor3D d_z = d_output.hadamard(d_activation);
         Tensor3D d_input = weights[0].transpose() * d_z;
         std::vector<Tensor3D> d_weights = {d_z * input.transpose()};
-        std::vector<Tensor3D> d_bias = {d_z};
+        std::vector<Tensor3D> d_biases = {d_z};
 
-        return {d_input, d_weights, d_bias};
+        return {d_input, d_weights, d_biases};
     }
 };
 
 class ConvolutionLayer : public Layer {
    public:
-    std::vector<Tensor3D> weights;
-    std::vector<double> bias;
     int channels_in;
     int out_channels;
     int kernel_size;
@@ -548,11 +545,8 @@ class ConvolutionLayer : public Layer {
             weights.back().he_initialise();
         }
 
-        // creates a list of bias values - one for each output channel
-        bias.reserve(out_channels);
-        for (int i = 0; i < out_channels; i++) {
-            bias.push_back(0.0);
-        }
+        // initialise biases to vector of 1x1x1 tensors with all elements set to 0
+        biases.resize(out_channels, Tensor3D(1, 1, 1));
     }
 
     // returns post-activation - stores input and preactivation for backprop
@@ -575,7 +569,8 @@ class ConvolutionLayer : public Layer {
             Tensor3D padded_input = Tensor3D::pad(input);
 
             for (int feature_map_index = 0; feature_map_index < weights.size(); ++feature_map_index) {
-                Tensor3D preactivation = Tensor3D::Conv(padded_input, weights[feature_map_index]) + bias[feature_map_index];
+                Tensor3D preactivation =
+                    Tensor3D::Conv(padded_input, weights[feature_map_index]) + biases[feature_map_index].data[0][0][0];
 
                 // store the preactivation for this feature map
                 tmp_z.data[feature_map_index] = preactivation.data[0];
@@ -816,6 +811,45 @@ class MSELoss : public Loss {
 };
 
 // ---------------------------------- OPTIMISERS -------------------------------------------
+class Optimiser {
+   public:
+    virtual ~Optimiser() = default;
+
+    virtual void compute_and_apply_updates(
+        const std::vector<std::unique_ptr<Layer>> &layers,
+        const std::vector<std::pair<std::vector<Tensor3D>, std::vector<Tensor3D>>> &gradients) = 0;
+};
+
+class SGDOptimiser : public Optimiser {
+   private:
+    double learning_rate;
+
+   public:
+    SGDOptimiser(double lr = 0.1) : learning_rate(lr) {}
+
+    void compute_and_apply_updates(
+        const std::vector<std::unique_ptr<Layer>> &layers,
+        const std::vector<std::pair<std::vector<Tensor3D>, std::vector<Tensor3D>>> &gradients) override {
+        // gradients is a list of pairs
+        // each pair corresponds to a layer and contains firstly a list of weight gradients and secondly a list of bias gradients
+
+        for (int layer_index = 0; layer_index < layers.size(); layer_index++) {
+            auto [weight_gradients, bias_gradients] = gradients[layer_index];
+
+            for (int weight_index = 0; weight_index < weight_gradients.size(); weight_index++) {
+                // update the corresponding layer's corresponding weight Tensor
+                (layers[layer_index])->weights[weight_index] =
+                    (layers[layer_index])->weights[weight_index] - weight_gradients[weight_index] * learning_rate;
+            }
+
+            for (int bias_index = 0; bias_index < bias_gradients.size(); bias_index++) {
+                // update the corresponding layer's corresponding bias Tensor
+                (layers[layer_index])->biases[bias_index] =
+                    (layers[layer_index])->biases[bias_index] - bias_gradients[bias_index] * learning_rate;
+            }
+        }
+    }
+};
 
 // ---------------------------------- NEURAL NETWORK -------------------------------------------
 class NeuralNetwork {
@@ -909,8 +943,9 @@ class NeuralNetwork {
    public:
     std::vector<LayerSpec> layer_specs;
     std::vector<std::unique_ptr<Layer>> layers;
-    // std::unique_ptr<Optimiser> optimiser;
+    std::unique_ptr<Optimiser> optimiser;
     std::unique_ptr<Loss> loss;
+
     bool layers_created = false;
 
     // default constructor
@@ -933,7 +968,7 @@ class NeuralNetwork {
      * @brief Sets the optimiser for the neural network.
      * @param new_optimiser A unique pointer to the new Optimiser object.
      */
-    // void set_optimiser(std::unique_ptr<Optimiser> new_optimiser) { optimiser = std::move(new_optimiser); }
+    void set_optimiser(std::unique_ptr<Optimiser> new_optimiser) { optimiser = std::move(new_optimiser); }
 
     /**
      * @brief Sets the loss function for the neural network.
@@ -1059,6 +1094,7 @@ int main() {
     nn.add_dense_layer(10);
     nn.add_dense_layer(1, "none");
     nn.set_loss(std::make_unique<MSELoss>());
+    nn.set_optimiser(std::make_unique<SGDOptimiser>(0.01));
 
     // test feedforward
     Tensor3D input(input_channels, input_height, input_width);
@@ -1068,6 +1104,7 @@ int main() {
     target.data[0][0][0] = 1;
 
     auto gradients = nn.calculate_gradients(input, target);
+    nn.optimiser->compute_and_apply_updates(nn.layers, gradients);
 
     std::cout << "done" << std::endl;
 }
