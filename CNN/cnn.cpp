@@ -409,6 +409,7 @@ class Layer {
 
     // pure virtual class - requires implementation in derived objects.
     virtual Tensor3D forward(const Tensor3D &input) = 0;
+    virtual BackwardReturn backward(const Tensor3D &d_output) = 0;
 };
 
 class DenseLayer : public Layer {
@@ -610,6 +611,7 @@ class ConvolutionLayer : public Layer {
                 }
 
                 // extract and rotate relevant kernel slice to relevant_kernel_slice
+                // todo use rotate_180 method
                 for (int y = 0; y < weights[0].height; y++) {
                     for (int x = 0; x < weights[0].width; x++) {
                         // rotate 180 degrees by inverting indices
@@ -639,6 +641,8 @@ class PoolingLayer : public Layer {
     int kernel_size;
     int stride;
     std::string mode;
+    Tensor3D input;  // store input for backward pass
+    std::vector<std::vector<std::vector<std::pair<int, int>>>> max_positions;  // stores positions of max values
 
     PoolingLayer(int kernel_size = 2, int stride = -1, std::string mode = "max")
         : kernel_size(kernel_size), stride(stride == -1 ? kernel_size : stride), mode(mode) {
@@ -648,10 +652,17 @@ class PoolingLayer : public Layer {
     }
 
     Tensor3D forward(const Tensor3D &input) override {
+        this->input = input;  // store input for backward pass
         // calculate output dimensions including partial window pooling
         int new_height = std::ceil((input.height - kernel_size) / stride + 1);
         int new_width = std::ceil((input.width - kernel_size) / stride + 1);
         Tensor3D output(input.depth, new_height, new_width);
+
+        // initialise max_positions storage
+        max_positions.resize(input.depth);
+        for (auto &channel : max_positions) {
+            channel.resize(new_height, std::vector<std::pair<int, int>>(new_width));
+        }
 
         if (mode == "max") {
             for (int d = 0; d < input.depth; ++d) {
@@ -665,12 +676,18 @@ class PoolingLayer : public Layer {
 
                         // find maximum in this window
                         double max_val = -std::numeric_limits<double>::infinity();
+                        int max_y = -1, max_x = -1;
                         for (int wy = start_y; wy < end_y; ++wy) {
                             for (int wx = start_x; wx < end_x; ++wx) {
-                                max_val = std::max(max_val, input.data[d][wy][wx]);
+                                if (input.data[d][wy][wx] > max_val) {
+                                    max_val = input.data[d][wy][wx];
+                                    max_y = wy;
+                                    max_x = wx;
+                                }
                             }
                         }
                         output.data[d][y][x] = max_val;
+                        max_positions[d][y][x] = {max_y, max_x};  // store position of maximum
                     }
                 }
             }
@@ -679,6 +696,32 @@ class PoolingLayer : public Layer {
         }
 
         return output;
+    }
+
+    BackwardReturn backward(const Tensor3D &d_output) override {
+        // initialise d_input with zeros
+        Tensor3D d_input(input.depth, input.height, input.width);
+        d_input.zero_initialise();
+
+        if (mode == "max") {
+            // for max pooling, propagate gradient only to the position where maximum was found
+            for (int d = 0; d < d_output.depth; ++d) {
+                for (int y = 0; y < d_output.height; ++y) {
+                    for (int x = 0; x < d_output.width; ++x) {
+                        // get the position where the maximum was found
+                        auto [max_y, max_x] = max_positions[d][y][x];
+                        // propagate gradient to that position
+                        d_input.data[d][max_y][max_x] += d_output.data[d][y][x];
+                    }
+                }
+            }
+        }
+
+        // pooling layers have no weights or biases to update
+        std::vector<Tensor3D> empty_weight_grads;
+        std::vector<Tensor3D> empty_bias_grads;
+
+        return {d_input, empty_weight_grads, empty_bias_grads};
     }
 };
 
@@ -930,12 +973,6 @@ class NeuralNetwork {
 };
 
 // todo:
-// implement convolutionlayer::backward something like
-    // d_kernel = Tensor3D::Conv(input, d_z);        // Gradient w.r.t kernel
-    // d_bias = d_z.sum;               // Gradient w.r.t bias
-    // Tensor3D rotated_kernel = kernel.rotate_180(); // Rotate kernel 180 degrees
-    // Tensor3D d_input = Tensor3D::Conv(d_z.pad(kernel.height / 2), rotated_kernel); // Gradient w.r.t input
-
 // implement other modes than same
 // implement different strides in convlayer
 // change to float values in Tensor3D
