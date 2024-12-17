@@ -49,7 +49,6 @@ std::vector<unsigned char> read_file(const std::string &path) {
     }
 }
 
-
 class Tensor3D {
    public:
     std::vector<std::vector<std::vector<double>>> data;
@@ -94,7 +93,7 @@ class Tensor3D {
 
     // return a new tensor with the width and height axis padded by 'amount'.
     static Tensor3D pad(const Tensor3D &input, int amount = 1) {
-        Tensor3D output(input.depth, input.height + amount, input.width + amount);
+        Tensor3D output(input.depth, input.height + 2 * amount, input.width + 2 * amount);
         for (int depth_index = 0; depth_index < output.depth; ++depth_index) {
             for (int height_index = amount; height_index < output.height - amount; ++height_index) {
                 for (int width_index = amount; width_index < output.width - amount; ++width_index) {
@@ -296,7 +295,7 @@ class Tensor3D {
     }
 
     Tensor3D transpose() const {
-        Tensor3D result(depth, height, width);
+        Tensor3D result(depth, width, height);
         for (size_t d = 0; d < depth; d++) {
             for (size_t i = 0; i < height; i++) {
                 for (size_t j = 0; j < width; j++) {
@@ -306,8 +305,6 @@ class Tensor3D {
         }
         return result;
     }
-
-    // todo add a reshape method for conv layer -> nn layer translation
 
     // softmax across width dimension for back-compatibility with old matrix class
     Tensor3D softmax() const {
@@ -355,30 +352,53 @@ class Tensor3D {
         return result;
     }
 
+    Tensor3D unflatten(size_t new_depth, size_t new_height, size_t new_width) const {
+        // check if dimensions match
+        if (depth != 1 || width != 1 || height != new_depth * new_height * new_width) {
+            throw std::runtime_error("cannot unflatten tensor - dimensions don't match. Expected flattened tensor of height " +
+                                     std::to_string(new_depth * new_height * new_width) + " but got height " +
+                                     std::to_string(height));
+        }
+
+        Tensor3D result(new_depth, new_height, new_width);
+        size_t idx = 0;
+
+        // copy values back to 3D structure
+        for (size_t d = 0; d < new_depth; d++) {
+            for (size_t h = 0; h < new_height; h++) {
+                for (size_t w = 0; w < new_width; w++) {
+                    result.data[d][h][w] = data[0][idx][0];
+                    idx++;
+                }
+            }
+        }
+
+        return result;
+    }
+
     static Tensor3D Conv(const Tensor3D &input, const Tensor3D &kernel) {
         // check dimensions
         if (input.depth != kernel.depth) {
             throw std::runtime_error("input and kernel must have same depth for convolution");
         }
 
-        int pad_amount = (kernel.height - 1) / 2;
-        Tensor3D output(1, input.height - pad_amount * 2, input.width - pad_amount * 2);
+        // perform full convolution (no padding)
+        Tensor3D output(1, input.height - kernel.height + 1, input.width - kernel.width + 1);
 
         // for each position in the output
-        for (int y = pad_amount; y < input.height - pad_amount; ++y) {
-            for (int x = pad_amount; x < input.width - pad_amount; ++x) {
+        for (int y = 0; y < output.height; ++y) {
+            for (int x = 0; x < output.width; ++x) {
                 double sum = 0.0;
-                
+
                 // sum over all channels and kernel positions
                 for (int d = 0; d < input.depth; ++d) {
                     for (int ky = 0; ky < kernel.height; ++ky) {
                         for (int kx = 0; kx < kernel.width; ++kx) {
-                            sum += input.data[d][y + ky - pad_amount][x + kx - pad_amount] * 
-                                  kernel.data[d][ky][kx];
+                            sum += input.data[d][y + ky][x + kx] * kernel.data[d][ky][kx];
                         }
                     }
                 }
-                output.data[0][y - pad_amount][x - pad_amount] = sum;
+                output.data[0][y][x] = sum;
             }
         }
         return output;
@@ -394,6 +414,27 @@ class Tensor3D {
             }
         }
         return result;
+    }
+
+    Tensor3D get_depth_slice(size_t depth_index) const {
+        if (depth_index >= depth) {
+            throw std::runtime_error("depth_index out of range in get_depth_slice");
+        }
+        
+        Tensor3D slice(1, height, width);
+        slice.data[0] = data[depth_index];
+        return slice;
+    }
+
+    void set_depth_slice(size_t depth_index, const Tensor3D& slice) {
+        if (depth_index >= depth) {
+            throw std::runtime_error("depth_index out of range in set_depth_slice");
+        }
+        if (slice.depth != 1 || slice.height != height || slice.width != width) {
+            throw std::runtime_error("slice dimensions don't match in set_depth_slice");
+        }
+        
+        data[depth_index] = slice.data[0];
     }
 };
 
@@ -440,25 +481,23 @@ class DenseLayer : public Layer {
     // returns post-activation - stores input and preactivation for backprop
     Tensor3D forward(const Tensor3D &input) override {
         if (weights.width != input.height) {
-            throw std::runtime_error(
-                "Input vector dimension is not appropriate for the weight matrix dimension");
+            throw std::runtime_error("Input vector dimension is not appropriate for the weight matrix dimension");
         }
-        
+
         this->input = input;
         z = weights * input + bias;
         Tensor3D a;
-
 
         if (activation_function == "sigmoid") {
             a = z.apply(sigmoid);
         } else if (activation_function == "relu") {
             a = z.apply(relu);
         } else if (activation_function == "softmax") {
-            a = z.softmax(); 
+            a = z.softmax();
         } else {
             a = z;
         }
-        
+
         return a;
     }
 
@@ -522,7 +561,9 @@ class ConvolutionLayer : public Layer {
 
         this->input = input;
         Tensor3D a(weights.size(), input.height, input.width);
-        Tensor3D tmp_z(weights.size(), input.height, input.width);  // actual z attribute is not initialised to correct dimensions so use this and then copy to z
+        Tensor3D tmp_z(
+            weights.size(), input.height,
+            input.width);  // actual z attribute is not initialised to correct dimensions so use this and then copy to z
         int pad_amount = 0;
 
         if (mode == "same") {
@@ -541,95 +582,75 @@ class ConvolutionLayer : public Layer {
             // copy tmp_z to z attribute
             z = tmp_z;
             return a;
-            
+
         } else {
             throw std::runtime_error("mode not specified or handled correctly");
         }
     }
 
-    BackwardReturn backward(const Tensor3D &d_output) {
-        // first compute d_z by applying relu derivative
-        Tensor3D d_z = d_output.hadamard(z.apply(relu_derivative));
-
+    // fixme later assumes 'same' padding
+    BackwardReturn backward(const Tensor3D &d_output) override {
         // initialise gradient tensors
         std::vector<Tensor3D> d_weights;
         std::vector<Tensor3D> d_bias;
-        d_weights.reserve(out_channels);
-        d_bias.reserve(out_channels);
-
-        // pad d_z for later computation of d_input
-        Tensor3D padded_error = Tensor3D::pad(d_z);
-
-        // compute gradients for each output channel
-        for (int out_c = 0; out_c < out_channels; out_c++) {
-            // extract this output channel's gradient
-            Tensor3D channel_d_z(1, d_z.height, d_z.width);
-            channel_d_z.data[0] = d_z.data[out_c];
-            
-            // initialise kernel gradient for this output channel
-            Tensor3D d_kernel(channels_in, kernel_size, kernel_size);
-            
-            // compute gradient for each input channel's kernel
-            for (int in_c = 0; in_c < channels_in; in_c++) {
-                // extract this input channel
-                Tensor3D channel_input(1, input.height, input.width);
-                channel_input.data[0] = input.data[in_c];
-                
-                // compute gradient for this input-output channel pair
-                Tensor3D channel_grad = Tensor3D::Conv(channel_input, channel_d_z);
-                d_kernel.data[in_c] = channel_grad.data[0];
-            }
-            d_weights.push_back(d_kernel);
-            
-            // compute d_bias for this output channel (sum of d_z)
-            double channel_d_bias = 0.0;
-            for (size_t h = 0; h < d_z.height; h++) {
-                for (size_t w = 0; w < d_z.width; w++) {
-                    channel_d_bias += d_z.data[out_c][h][w];
-                }
-            }
-            Tensor3D bias_grad(1, 1, 1);
-            bias_grad.data[0][0][0] = channel_d_bias;
-            d_bias.push_back(bias_grad);
-        }
+        d_weights.reserve(weights.size());
+        d_bias.reserve(weights.size());
 
         // compute d_input
-
         Tensor3D d_input(input.depth, input.height, input.width);
-        Tensor3D relevant_d_z_slice(1, d_z.height, d_z.width);
-        Tensor3D relevant_kernel_slice(1, weights[0].height, weights[0].width);
+        d_input.zero_initialise();
 
-        for (int in_ch = 0; in_ch < weights[0].depth; in_ch++) {
+        // pad d_output for full convolution
+        int pad_amount = (kernel_size - 1) / 2;
+        Tensor3D padded_d_output = Tensor3D::pad(d_output, pad_amount);
+
+        for (int in_ch = 0; in_ch < input.depth; in_ch++) {
             // sum contributions from all output channels
             for (int k = 0; k < weights.size(); k++) {
+                // extract relevant delta channel and kernel slice
+                Tensor3D relevant_d_z_slice = padded_d_output.get_depth_slice(k);
+                Tensor3D relevant_kernel_slice = weights[k].get_depth_slice(in_ch).rotate_180();
                 
-                // extract relevant delta channel to relevant_d_z_slice
-                for (int y = 0; y < d_z.height; y++) {
-                    for (int x = 0; x < d_z.width; x++) {
-                        relevant_d_z_slice.data[0][y][x] = d_z.data[k][y][x];
-                    }
-                }
-
-                // extract and rotate relevant kernel slice to relevant_kernel_slice
-                // todo use rotate_180 method
-                for (int y = 0; y < weights[0].height; y++) {
-                    for (int x = 0; x < weights[0].width; x++) {
-                        // rotate 180 degrees by inverting indices
-                        relevant_kernel_slice.data[0][y][x] = 
-                            weights[k].data[in_ch][weights[0].height-1-y][weights[0].width-1-x];
-                    }
-                }
-                
-                // Conv function will handle 'same' padding internally
+                // perform full convolution
                 Tensor3D d_input_contribution = Tensor3D::Conv(relevant_d_z_slice, relevant_kernel_slice);
 
-                // add the contribution of this kernel to this input channel's d_input layer
-                for (int y = 0; y < d_input_contribution.height; y++) {
-                    for (int x = 0; x < d_input_contribution.width; x++) {
+                // add the contribution to d_input
+                for (int y = 0; y < d_input.height; y++) {
+                    for (int x = 0; x < d_input.width; x++) {
                         d_input.data[in_ch][y][x] += d_input_contribution.data[0][y][x];
                     }
                 }
             }
+        }
+
+        // compute weight gradients
+        for (int k = 0; k < weights.size(); k++) {
+            Tensor3D d_weight(input.depth, kernel_size, kernel_size);
+            
+            // pad input for full convolution
+            Tensor3D padded_input = Tensor3D::pad(input, pad_amount);
+            
+            for (int in_ch = 0; in_ch < input.depth; in_ch++) {
+                // extract relevant input and gradient channels
+                Tensor3D input_channel = padded_input.get_depth_slice(in_ch);
+                Tensor3D d_output_channel = d_output.get_depth_slice(k);
+                
+                // compute gradient for this input-output channel pair
+                Tensor3D channel_grad = Tensor3D::Conv(input_channel, d_output_channel);
+                d_weight.set_depth_slice(in_ch, channel_grad);
+            }
+            d_weights.push_back(d_weight);
+            
+            // compute bias gradient (sum of d_output)
+            double d_bias_val = 0.0;
+            for (int y = 0; y < d_output.height; y++) {
+                for (int x = 0; x < d_output.width; x++) {
+                    d_bias_val += d_output.data[k][y][x];
+                }
+            }
+            Tensor3D bias_grad(1, 1, 1);
+            bias_grad.data[0][0][0] = d_bias_val;
+            d_bias.push_back(bias_grad);
         }
 
         return {d_input, d_weights, d_bias};
@@ -641,8 +662,9 @@ class PoolingLayer : public Layer {
     int kernel_size;
     int stride;
     std::string mode;
-    Tensor3D input;  // store input for backward pass
+    Tensor3D input;                                                            // store input for backward pass
     std::vector<std::vector<std::vector<std::pair<int, int>>>> max_positions;  // stores positions of max values
+    size_t output_depth, output_height, output_width;                          // store output dimensions for unflattening
 
     PoolingLayer(int kernel_size = 2, int stride = -1, std::string mode = "max")
         : kernel_size(kernel_size), stride(stride == -1 ? kernel_size : stride), mode(mode) {
@@ -654,20 +676,21 @@ class PoolingLayer : public Layer {
     Tensor3D forward(const Tensor3D &input) override {
         this->input = input;  // store input for backward pass
         // calculate output dimensions including partial window pooling
-        int new_height = std::ceil((input.height - kernel_size) / stride + 1);
-        int new_width = std::ceil((input.width - kernel_size) / stride + 1);
-        Tensor3D output(input.depth, new_height, new_width);
+        output_height = std::ceil((input.height - kernel_size) / stride + 1);
+        output_width = std::ceil((input.width - kernel_size) / stride + 1);
+        output_depth = input.depth;
+        Tensor3D output(output_depth, output_height, output_width);
 
         // initialise max_positions storage
         max_positions.resize(input.depth);
         for (auto &channel : max_positions) {
-            channel.resize(new_height, std::vector<std::pair<int, int>>(new_width));
+            channel.resize(output_height, std::vector<std::pair<int, int>>(output_width));
         }
 
         if (mode == "max") {
             for (int d = 0; d < input.depth; ++d) {
-                for (int y = 0; y < new_height; ++y) {
-                    for (int x = 0; x < new_width; ++x) {
+                for (int y = 0; y < output_height; ++y) {
+                    for (int x = 0; x < output_width; ++x) {
                         // calculate window boundaries
                         int start_y = y * stride;
                         int start_x = x * stride;
@@ -699,19 +722,32 @@ class PoolingLayer : public Layer {
     }
 
     BackwardReturn backward(const Tensor3D &d_output) override {
+        // if the gradient is coming from a dense layer, we need to unflatten it first
+        Tensor3D d_output_unflattened = d_output;
+        if (d_output.depth == 1 && d_output.width == 1) {
+            d_output_unflattened = d_output.unflatten(output_depth, output_height, output_width);
+        }
+
         // initialise d_input with zeros
         Tensor3D d_input(input.depth, input.height, input.width);
         d_input.zero_initialise();
 
         if (mode == "max") {
             // for max pooling, propagate gradient only to the position where maximum was found
-            for (int d = 0; d < d_output.depth; ++d) {
-                for (int y = 0; y < d_output.height; ++y) {
-                    for (int x = 0; x < d_output.width; ++x) {
+            // d_output should have same dimensions as the output from forward pass
+            if (d_output_unflattened.depth != max_positions.size() || d_output_unflattened.height != max_positions[0].size() ||
+                d_output_unflattened.width != max_positions[0][0].size()) {
+                throw std::runtime_error(
+                    "d_output dimensions do not match stored max_positions dimensions in pooling layer backward pass");
+            }
+
+            for (size_t d = 0; d < d_output_unflattened.depth; ++d) {
+                for (size_t y = 0; y < d_output_unflattened.height; ++y) {
+                    for (size_t x = 0; x < d_output_unflattened.width; ++x) {
                         // get the position where the maximum was found
                         auto [max_y, max_x] = max_positions[d][y][x];
                         // propagate gradient to that position
-                        d_input.data[d][max_y][max_x] += d_output.data[d][y][x];
+                        d_input.data[d][max_y][max_x] += d_output_unflattened.data[d][y][x];
                     }
                 }
             }
@@ -834,9 +870,9 @@ class NeuralNetwork {
             switch (spec.type) {
                 case LayerSpec::CONV: {
                     spec.in_channels = dims.depth;
-                    layers.push_back(std::make_unique<ConvolutionLayer>(spec.in_channels, spec.out_channels, spec.kernel_size,
-                                                                        spec.mode));
-                    
+                    layers.push_back(
+                        std::make_unique<ConvolutionLayer>(spec.in_channels, spec.out_channels, spec.kernel_size, spec.mode));
+
                     // todo change dims.width and dims.height here if ever put more modes than same
 
                     dims.depth = spec.out_channels;
@@ -867,26 +903,6 @@ class NeuralNetwork {
     // std::unique_ptr<Optimiser> optimiser;
     std::unique_ptr<Loss> loss;
     bool layers_created = false;
-
-    struct EvaluationMetrics {
-        double loss;
-        double accuracy;
-        double precision;
-        double recall;
-        double f1_score;
-
-        // Add this operator overload for printing
-        friend std::ostream &operator<<(std::ostream &os, const EvaluationMetrics &metrics) {
-            os << "----------------\n"
-               << "Loss: " << metrics.loss << "\n"
-               << "Accuracy: " << metrics.accuracy << "\n"
-               << "Precision: " << metrics.precision << "\n"
-               << "Recall: " << metrics.recall << "\n"
-               << "F1 Score: " << metrics.f1_score << "\n"
-               << "----------------";
-            return os;
-        }
-    };
 
     // default constructor
     NeuralNetwork() {}
@@ -970,6 +986,46 @@ class NeuralNetwork {
         }
         return current;
     }
+
+    /**
+     * @brief Performs backpropagation through the network for a single training example
+     * @param input The input to the network
+     * @param target The target output
+     * @return A vector of pairs, each containing weight and bias gradients for a layer
+     */
+    std::vector<std::pair<std::vector<Tensor3D>, std::vector<Tensor3D>>> calculate_gradients(const Tensor3D &input,
+                                                                                             const Tensor3D &target) {
+        if (!loss) {
+            throw std::runtime_error("loss function not set");
+        }
+
+        // perform forward pass to get predictions
+        Tensor3D predicted = feedforward(input);
+
+        // store gradients for each layer
+        std::vector<std::pair<std::vector<Tensor3D>, std::vector<Tensor3D>>> all_gradients;
+        all_gradients.reserve(layers.size());
+
+        // compute initial gradient from loss function
+        Tensor3D gradient = loss->derivative(predicted, target);
+
+        // backpropagate through layers in reverse order
+        for (auto it = layers.rbegin(); it != layers.rend(); ++it) {
+            // compute gradients for current layer
+            BackwardReturn layer_grads = (*it)->backward(gradient);
+
+            // store the weight and bias gradients
+            all_gradients.push_back({layer_grads.weight_grads, layer_grads.bias_grads});
+
+            // update gradient for next layer
+            gradient = layer_grads.input_error;
+        }
+
+        // reverse the gradients so they match the order of layers
+        std::reverse(all_gradients.begin(), all_gradients.end());
+
+        return all_gradients;
+    }
 };
 
 // todo:
@@ -993,9 +1049,16 @@ int main() {
     nn.add_dense_layer(20);
     nn.add_dense_layer(10);
     nn.add_dense_layer(1, "none");
+    nn.set_loss(std::make_unique<MSELoss>());
 
     // test feedforward
     Tensor3D input(input_channels, input_height, input_width);
-    Tensor3D output = nn.feedforward(input);
+    input.uniform_initialise();
+    // Tensor3D output = nn.feedforward(input);
+    Tensor3D target(1, 1, 1);
+    target.data[0][0][0] = 1;
+
+    auto gradients = nn.calculate_gradients(input, target);
+
     std::cout << "done" << std::endl;
 }
