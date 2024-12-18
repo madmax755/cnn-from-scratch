@@ -1076,35 +1076,138 @@ class NeuralNetwork {
 // implement other modes than same
 // implement different strides in convlayer
 // change to float values in Tensor3D
+// batch normalisation
+// dropout
 
-// runner code
+
 int main() {
-    int input_width = 28;
-    int input_height = 28;
-    int input_channels = 3;
-    int kernel_size = 3;
+    std::vector<std::vector<Tensor3D>> training_set;
+    training_set.reserve(9000);
+    std::vector<std::vector<Tensor3D>> eval_set;
+    training_set.reserve(1000);
 
-    // test usage
+    // create training set from binary image data files
+    for (int i = 0; i < 10; ++i) {
+        std::string file_path = "../mnist data/data" + std::to_string(i) + ".dat";
+        std::vector<unsigned char> full_digit_data = read_file(file_path);
+
+        for (int j = 0; j < 784000; j += 28 * 28) {  // todo make more general with training ratio
+            // create the input Tensor3D with shape (1, 28, 28)
+            Tensor3D input_data(1, 28, 28);
+            
+            // fill the tensor with normalised pixel values
+            for (int row = 0; row < 28; ++row) {
+                for (int col = 0; col < 28; ++col) {
+                    double normalised_pixel = static_cast<double>(full_digit_data[j + row * 28 + col]) / 255.0;
+                    input_data.data[0][row][col] = normalised_pixel;
+                }
+            }
+
+            // create the label Tensor3D
+            Tensor3D label_data(10, 1);
+            std::vector<std::vector<double>> data;
+
+            // construct the label Tensor3D with 1.0 in the position of the digit and zeros elsewhere
+            for (size_t l = 0; l < i; ++l) {
+                data.push_back({0.0});
+            }
+            data.push_back({1.0});
+            for (size_t l = 0; l + i + 1 < 10; ++l) {
+                data.push_back({0.0});
+            }
+
+            label_data.data[0] = data;
+
+            // push both image and label into appropriate set
+            if (j < 705600) {
+                training_set.push_back({input_data, label_data});
+            } else {
+                eval_set.push_back({input_data, label_data});
+            }
+        }
+    }
+
+    int kernel_size = 3;
+    
+    // network architecture setup
     NeuralNetwork nn;
-    nn.add_conv_layer(5, kernel_size);
+    nn.add_conv_layer(3, 3);
     nn.add_pool_layer();
-    nn.add_conv_layer(10, kernel_size);
+    nn.add_conv_layer(7, 5);
     nn.add_pool_layer();
     nn.add_dense_layer(20);
-    nn.add_dense_layer(10);
-    nn.add_dense_layer(1, "none");
-    nn.set_loss(std::make_unique<MSELoss>());
+    nn.add_dense_layer(10, "softmax");
+    nn.set_loss(std::make_unique<CrossEntropyLoss>());
     nn.set_optimiser(std::make_unique<SGDOptimiser>(0.01));
 
-    // test feedforward
-    Tensor3D input(input_channels, input_height, input_width);
-    input.uniform_initialise();
-    // Tensor3D output = nn.feedforward(input);
-    Tensor3D target(1, 1, 1);
-    target.data[0][0][0] = 1;
+    // training hyperparameters
+    const int num_epochs = 10;
+    const int batch_size = 32;
+    const int batches_per_epoch = training_set.size() / batch_size;
+    
+    // training loop
+    for (int epoch = 0; epoch < num_epochs; ++epoch) {
+        // shuffle training data at start of each epoch
+        std::shuffle(training_set.begin(), training_set.end(), std::random_device());
+        
+        double epoch_loss = 0.0;
+        
+        // batch loop
+        for (int batch = 0; batch < batches_per_epoch; ++batch) {
+            std::vector<std::pair<std::vector<Tensor3D>, std::vector<Tensor3D>>> batch_gradients;
+            double batch_loss = 0.0;
+            
+            // accumulate gradients over batch
+            for (int i = 0; i < batch_size; ++i) {
+                int idx = batch * batch_size + i;
+                auto& input = training_set[idx][0];
+                auto& target = training_set[idx][1];
+                
+                // accumulate gradients
+                auto gradients = nn.calculate_gradients(input, target);
+                
+                // initialise batch_gradients if first sample
+                if (i == 0) {
+                    batch_gradients = gradients;
+                } else {
+                    // add gradients element-wise
+                    for (size_t layer = 0; layer < gradients.size(); ++layer) {
+                        for (size_t w = 0; w < gradients[layer].first.size(); ++w) {
+                            batch_gradients[layer].first[w] = batch_gradients[layer].first[w] + gradients[layer].first[w];
+                        }
+                        for (size_t b = 0; b < gradients[layer].second.size(); ++b) {
+                            batch_gradients[layer].second[b] = batch_gradients[layer].second[b] + gradients[layer].second[b];
+                        }
+                    }
+                }
+                
+                // accumulate loss
+                batch_loss += nn.loss->compute(nn.feedforward(input), target);
+            }
+            
+            // average gradients and loss over batch
+            for (auto& layer_grads : batch_gradients) {
+                for (auto& w_grad : layer_grads.first) {
+                    w_grad = w_grad * (1.0 / batch_size);
+                }
+                for (auto& b_grad : layer_grads.second) {
+                    b_grad = b_grad * (1.0 / batch_size);
+                }
+            }
+            batch_loss /= batch_size;
+            epoch_loss += batch_loss;
+            
+            // apply averaged gradients
+            nn.optimiser->compute_and_apply_updates(nn.layers, batch_gradients);
+            
+            // print batch progress
+            if (batch % 10 == 0) {
+                std::cout << "epoch " << epoch + 1 << "/" << num_epochs 
+                         << ", batch " << batch << "/" << batches_per_epoch 
+                         << ", loss: " << batch_loss << '\n';
+            }
+        }
+    }
 
-    auto gradients = nn.calculate_gradients(input, target);
-    nn.optimiser->compute_and_apply_updates(nn.layers, gradients);
-
-    std::cout << "done" << std::endl;
+    std::cout << "Training complete" << std::endl;
 }
