@@ -435,9 +435,9 @@ class Tensor3D {
         data[depth_index] = slice.data[0];
     }
 
-    friend std::ostream& operator<<(std::ostream& os, const Tensor3D& tensor) {
+    friend std::ostream &operator<<(std::ostream &os, const Tensor3D &tensor) {
         os << "Tensor3D(" << tensor.depth << ", " << tensor.height << ", " << tensor.width << ")\n";
-        
+
         for (size_t d = 0; d < tensor.depth; ++d) {
             os << "Depth " << d << ":\n";
             for (size_t h = 0; h < tensor.height; ++h) {
@@ -508,7 +508,7 @@ class DenseLayer : public Layer {
 
         this->input = input;
         z = weights[0] * input + biases[0];
-        
+
         Tensor3D a;
 
         if (activation_function == "sigmoid") {
@@ -535,7 +535,8 @@ class DenseLayer : public Layer {
             d_activation = z.apply(relu_derivative);
             d_z = d_output.hadamard(d_activation);
         } else if (activation_function == "softmax" or activation_function == "none") {
-            d_z = d_output;  // combination of softmax and cross entropy loss means d_z is just predicted - target i.e. what is passed in as d_output
+            d_z = d_output;  // combination of softmax and cross entropy loss means d_z is just predicted - target i.e. what is
+                             // passed in as d_output
         } else {
             throw std::runtime_error("Unsupported activation function");
         }
@@ -612,7 +613,6 @@ class ConvolutionLayer : public Layer {
 
     // fixme later assumes 'same' padding
     BackwardReturn backward(const Tensor3D &d_output) override {
-
         Tensor3D d_z = d_output.hadamard(z.apply(relu_derivative));
 
         // initialise gradient tensors
@@ -875,9 +875,137 @@ class SGDOptimiser : public Optimiser {
     }
 };
 
+class AdamWOptimiser : public Optimiser {
+   private:
+    double learning_rate;
+    double beta1;
+    double beta2;
+    double epsilon;
+    double weight_decay;
+    int t;                                 // timestep
+    std::vector<std::pair<std::vector<Tensor3D>, std::vector<Tensor3D>>> m;  // first moment
+    std::vector<std::pair<std::vector<Tensor3D>, std::vector<Tensor3D>>> v;  // second moment
+
+    // list of layers
+    // each element is a pair of vectors
+    // first vector is weight gradients
+    // second vector is bias gradients
+
+   public:
+    /**
+     * @brief Constructs an AdamWOptimiser object with the specified parameters.
+     * @param lr The learning rate (default: 0.001).
+     * @param b1 The beta1 parameter (default: 0.9).
+     * @param b2 The beta2 parameter (default: 0.999).
+     * @param eps The epsilon parameter for numerical stability (default: 1e-8).
+     * @param wd The weight decay parameter (default: 0.01).
+     */
+    AdamWOptimiser(double lr = 0.001, double b1 = 0.9, double b2 = 0.999, double eps = 1e-8, double wd = 0.01)
+        : learning_rate(lr), beta1(b1), beta2(b2), epsilon(eps), weight_decay(wd), t(0) {}
+
+    /**
+     * @brief Initializes the first and second moment vectors for AdamW optimization.
+     * @param layers Vector of unique pointers to layers of the neural network.
+     */
+    void initialize_moments(const std::vector<std::unique_ptr<Layer>> &layers) {
+        m.clear();
+        v.clear();
+        
+        // iterate through each layer
+        for (const auto& layer : layers) {
+            std::vector<Tensor3D> layer_weight_m, layer_weight_v;
+            std::vector<Tensor3D> layer_bias_m, layer_bias_v;
+            
+            // initialize moments for weights
+            for (const auto& weight : layer->weights) {
+                Tensor3D zero_tensor(weight.depth, weight.height, weight.width);
+                layer_weight_m.push_back(zero_tensor);
+                layer_weight_v.push_back(zero_tensor);
+            }
+            
+            // initialize moments for biases
+            for (const auto& bias : layer->biases) {
+                Tensor3D zero_tensor(bias.depth, bias.height, bias.width);
+                layer_bias_m.push_back(zero_tensor);
+                layer_bias_v.push_back(zero_tensor);
+            }
+            
+            // store the moments for this layer
+            m.push_back({layer_weight_m, layer_bias_m});
+            v.push_back({layer_weight_v, layer_bias_v});
+        }
+    }
+
+    /**
+     * @brief Computes and applies updates using the AdamW optimization algorithm.
+     * @param layers The layers of the neural network to update.
+     * @param gradients The gradients used for updating the layers.
+     */
+    void compute_and_apply_updates(
+        const std::vector<std::unique_ptr<Layer>> &layers,
+        const std::vector<std::pair<std::vector<Tensor3D>, std::vector<Tensor3D>>> &gradients) override {
+
+        if (m.empty() or v.empty()) {
+            initialize_moments(layers);
+        }
+
+        t++;  // increment timestep
+
+        for (size_t layer_index = 0; layer_index < layers.size(); ++layer_index) {            
+            // calculate updates for each weight parameter
+            for (int param_no = 0; param_no < m[layer_index].first.size(); ++param_no) {
+                // update biased first moment estimate
+                m[layer_index].first[param_no] = m[layer_index].first[param_no] * beta1 + gradients[layer_index].first[param_no] * (1.0 - beta1);
+
+                // update biased second raw moment estimate
+                v[layer_index].first[param_no] = v[layer_index].first[param_no] * beta2 + gradients[layer_index].first[param_no].hadamard(gradients[layer_index].first[param_no]) * (1.0 - beta2);
+            
+                // compute bias-corrected first moment estimate
+                Tensor3D m_hat = m[layer_index].first[param_no] * (1.0 / (1.0 - std::pow(beta1, t)));
+
+                // compute bias-corrected second raw moment estimate
+                Tensor3D v_hat = v[layer_index].first[param_no] * (1.0 / (1.0 - std::pow(beta2, t)));
+
+                // compute the Adam update
+                Tensor3D update = m_hat.hadamard(v_hat.apply([this](double x) { return 1.0 / (std::sqrt(x) + epsilon); }));
+
+                // apply weight decay
+                layers[layer_index]->weights[param_no] = layers[layer_index]->weights[param_no] * (1.0 - learning_rate * weight_decay);
+                // apply Adam update
+                layers[layer_index]->weights[param_no] = layers[layer_index]->weights[param_no] - (update * learning_rate);
+            
+            }
+
+            // calculate updates for each bias parameter
+            for (int param_no = 0; param_no < m[layer_index].second.size(); ++param_no) {
+                // update biased first moment estimate
+                m[layer_index].second[param_no] = m[layer_index].second[param_no] * beta1 + gradients[layer_index].second[param_no] * (1.0 - beta1);
+
+                // update biased second raw moment estimate
+                v[layer_index].second[param_no] = v[layer_index].second[param_no] * beta2 + gradients[layer_index].second[param_no].hadamard(gradients[layer_index].second[param_no]) * (1.0 - beta2);
+            
+                // compute bias-corrected first moment estimate
+                Tensor3D m_hat = m[layer_index].second[param_no] * (1.0 / (1.0 - std::pow(beta1, t)));
+
+                // compute bias-corrected second raw moment estimate
+                Tensor3D v_hat = v[layer_index].second[param_no] * (1.0 / (1.0 - std::pow(beta2, t)));
+
+                // compute the Adam update
+                Tensor3D update = m_hat.hadamard(v_hat.apply([this](double x) { return 1.0 / (std::sqrt(x) + epsilon); }));
+                
+                // no weight decay for biases
+
+                // apply Adam update
+                layers[layer_index]->biases[param_no] = layers[layer_index]->biases[param_no] - (update * learning_rate);
+            
+            }
+        }
+    }
+};
+
 // ---------------------------------- NEURAL NETWORK -------------------------------------------
 class NeuralNetwork {
-private:
+   private:
     struct LayerSpec {
         enum Type { CONV, POOL, DENSE } type;
 
@@ -964,7 +1092,7 @@ private:
         layers_created = true;
     }
 
-public:
+   public:
     std::vector<LayerSpec> layer_specs;
     std::vector<std::unique_ptr<Layer>> layers;
     std::unique_ptr<Optimiser> optimiser;
@@ -1103,7 +1231,6 @@ public:
 // batch normalisation
 // dropout
 
-
 int main() {
     std::vector<std::vector<Tensor3D>> training_set;
     training_set.reserve(9000);
@@ -1118,7 +1245,7 @@ int main() {
         for (int j = 0; j < 784000; j += 28 * 28) {  // todo make more general with training ratio
             // create the input Tensor3D with shape (1, 28, 28)
             Tensor3D input_data(1, 28, 28);
-            
+
             // fill the tensor with normalised pixel values
             for (int row = 0; row < 28; ++row) {
                 for (int col = 0; col < 28; ++col) {
@@ -1151,7 +1278,6 @@ int main() {
         }
     }
 
-    
     // network architecture setup
     NeuralNetwork nn;
     nn.add_conv_layer(32, 3);
@@ -1159,34 +1285,34 @@ int main() {
     nn.add_dense_layer(100);
     nn.add_dense_layer(10, "softmax");
     nn.set_loss(std::make_unique<CrossEntropyLoss>());
-    nn.set_optimiser(std::make_unique<SGDOptimiser>(0.01));
+    nn.set_optimiser(std::make_unique<AdamWOptimiser>());
 
     // training hyperparameters
     const int num_epochs = 10;
     const int batch_size = 100;
     const int batches_per_epoch = training_set.size() / batch_size;
-    
+
     // training loop
     for (int epoch = 0; epoch < num_epochs; ++epoch) {
         // shuffle training data at start of each epoch
         std::shuffle(training_set.begin(), training_set.end(), std::random_device());
-        
+
         double epoch_loss = 0.0;
-        
+
         // batch loop
         for (int batch = 0; batch < batches_per_epoch; ++batch) {
             std::vector<std::pair<std::vector<Tensor3D>, std::vector<Tensor3D>>> batch_gradients;
             double batch_loss = 0.0;
-            
+
             // accumulate gradients over batch
             for (int i = 0; i < batch_size; ++i) {
                 int idx = batch * batch_size + i;
-                auto& input = training_set[idx][0];
-                auto& target = training_set[idx][1];
-                
+                auto &input = training_set[idx][0];
+                auto &target = training_set[idx][1];
+
                 // accumulate gradients
                 auto gradients = nn.calculate_gradients(input, target);
-                
+
                 // initialise batch_gradients if first sample
                 if (i == 0) {
                     batch_gradients = gradients;
@@ -1201,31 +1327,30 @@ int main() {
                         }
                     }
                 }
-                
+
                 // accumulate loss
                 batch_loss += nn.loss->compute(nn.feedforward(input), target);
             }
-            
+
             // average gradients and loss over batch
-            for (auto& layer_grads : batch_gradients) {
-                for (auto& w_grad : layer_grads.first) {
+            for (auto &layer_grads : batch_gradients) {
+                for (auto &w_grad : layer_grads.first) {
                     w_grad = w_grad * (1.0 / batch_size);
                 }
-                for (auto& b_grad : layer_grads.second) {
+                for (auto &b_grad : layer_grads.second) {
                     b_grad = b_grad * (1.0 / batch_size);
                 }
             }
             batch_loss /= batch_size;
             epoch_loss += batch_loss;
-            
+
             // apply averaged gradients
             nn.optimiser->compute_and_apply_updates(nn.layers, batch_gradients);
-            
+
             // print batch progress
             if (batch % 5 == 0) {
-                std::cout << "epoch " << epoch + 1 << "/" << num_epochs 
-                         << ", batch " << batch << "/" << batches_per_epoch 
-                         << ", loss: " << batch_loss << '\n';
+                std::cout << "epoch " << epoch + 1 << "/" << num_epochs << ", batch " << batch << "/" << batches_per_epoch
+                          << ", loss: " << batch_loss << '\n';
             }
         }
     }
