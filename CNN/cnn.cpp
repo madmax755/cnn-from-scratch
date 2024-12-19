@@ -27,7 +27,7 @@ double sigmoid_derivative(double x) {
 double relu(double x) { return std::max(x, 0.0); }
 
 // relu derivative
-double relu_derivative(double x) { return (x > 0) ? x : 0.0; }
+double relu_derivative(double x) { return (x > 0) ? 1.0 : 0.0; }
 
 // read binary file into a vector
 std::vector<unsigned char> read_file(const std::string &path) {
@@ -136,10 +136,10 @@ class Tensor3D {
         }
     }
 
-    void uniform_initialise() {
+    void uniform_initialise(double lower_bound = 0.0, double upper_bound = 1.0) {
         std::random_device rd;
         std::mt19937 gen(rd());
-        std::uniform_real_distribution<> dis(0, 1);
+        std::uniform_real_distribution<> dis(lower_bound, upper_bound);
 
         for (auto &channel : data) {
             for (auto &row : channel) {
@@ -306,29 +306,27 @@ class Tensor3D {
         return result;
     }
 
-    // softmax across width dimension for back-compatibility with old Tensor3D class
+    // softmax across height dimension for back-compatibility with old Tensor3D class
     Tensor3D softmax() const {
         Tensor3D result(depth, height, width);
 
         for (size_t d = 0; d < depth; d++) {
-            for (size_t w = 0; w < width; w++) {  // equivalent to "columns" in Tensor3D
-                // find max
-                double max_val = -std::numeric_limits<double>::infinity();
-                for (size_t h = 0; h < height; h++) {  // equivalent to "rows" in Tensor3D
-                    max_val = std::max(max_val, data[d][h][w]);
-                }
+            // find max across height (class scores)
+            double max_val = -std::numeric_limits<double>::infinity();
+            for (size_t h = 0; h < height; h++) {
+                max_val = std::max(max_val, data[d][h][0]);
+            }
 
-                // compute exp and sum
-                double sum = 0.0;
-                for (size_t h = 0; h < height; h++) {
-                    result.data[d][h][w] = std::exp(data[d][h][w] - max_val);
-                    sum += result.data[d][h][w];
-                }
+            // compute exp and sum across height
+            double sum = 0.0;
+            for (size_t h = 0; h < height; h++) {
+                result.data[d][h][0] = std::exp(data[d][h][0] - max_val);
+                sum += result.data[d][h][0];
+            }
 
-                // normalize
-                for (size_t h = 0; h < height; h++) {
-                    result.data[d][h][w] /= sum;
-                }
+            // normalize across height
+            for (size_t h = 0; h < height; h++) {
+                result.data[d][h][0] /= sum;
             }
         }
         return result;
@@ -436,6 +434,24 @@ class Tensor3D {
 
         data[depth_index] = slice.data[0];
     }
+
+    friend std::ostream& operator<<(std::ostream& os, const Tensor3D& tensor) {
+        os << "Tensor3D(" << tensor.depth << ", " << tensor.height << ", " << tensor.width << ")\n";
+        
+        for (size_t d = 0; d < tensor.depth; ++d) {
+            os << "Depth " << d << ":\n";
+            for (size_t h = 0; h < tensor.height; ++h) {
+                os << "[";
+                for (size_t w = 0; w < tensor.width; ++w) {
+                    os << std::fixed << std::setprecision(4) << tensor.data[d][h][w];
+                    if (w < tensor.width - 1) os << ", ";
+                }
+                os << "]\n";
+            }
+            if (d < tensor.depth - 1) os << "\n";
+        }
+        return os;
+    }
 };
 
 struct BackwardReturn {
@@ -477,6 +493,8 @@ class DenseLayer : public Layer {
             weights[0].xavier_initialise();
         } else if (activation_function == "relu") {
             weights[0].he_initialise();
+        } else if (activation_function == "softmax") {
+            weights[0].uniform_initialise(0, 1);
         } else {
             weights[0].uniform_initialise();
         }
@@ -490,6 +508,7 @@ class DenseLayer : public Layer {
 
         this->input = input;
         z = weights[0] * input + biases[0];
+        
         Tensor3D a;
 
         if (activation_function == "sigmoid") {
@@ -507,17 +526,20 @@ class DenseLayer : public Layer {
 
     BackwardReturn backward(const Tensor3D &d_output) {
         Tensor3D d_activation;
+        Tensor3D d_z;
+
         if (activation_function == "sigmoid") {
             d_activation = z.apply(sigmoid_derivative);
+            d_z = d_output.hadamard(d_activation);
         } else if (activation_function == "relu") {
             d_activation = z.apply(relu_derivative);
+            d_z = d_output.hadamard(d_activation);
         } else if (activation_function == "softmax" or activation_function == "none") {
-            d_activation = d_output;  // derivative already included in loss function
+            d_z = d_output;  // combination of softmax and cross entropy loss means d_z is just predicted - target i.e. what is passed in as d_output
         } else {
             throw std::runtime_error("Unsupported activation function");
         }
 
-        Tensor3D d_z = d_output.hadamard(d_activation);
         Tensor3D d_input = weights[0].transpose() * d_z;
         std::vector<Tensor3D> d_weights = {d_z * input.transpose()};
         std::vector<Tensor3D> d_biases = {d_z};
@@ -566,14 +588,14 @@ class ConvolutionLayer : public Layer {
         int pad_amount = 0;
 
         if (mode == "same") {
-            Tensor3D padded_input = Tensor3D::pad(input);
+            Tensor3D padded_input = Tensor3D::pad(input, (kernel_size - 1) / 2);
 
             for (int feature_map_index = 0; feature_map_index < weights.size(); ++feature_map_index) {
                 Tensor3D preactivation =
                     Tensor3D::Conv(padded_input, weights[feature_map_index]) + biases[feature_map_index].data[0][0][0];
 
                 // store the preactivation for this feature map
-                tmp_z.data[feature_map_index] = preactivation.data[0];
+                tmp_z.set_depth_slice(feature_map_index, preactivation);
 
                 // apply the activation function and store the result for this feature map
                 a.data[feature_map_index] = preactivation.apply(relu).data[0];
@@ -590,6 +612,9 @@ class ConvolutionLayer : public Layer {
 
     // fixme later assumes 'same' padding
     BackwardReturn backward(const Tensor3D &d_output) override {
+
+        Tensor3D d_z = d_output.hadamard(z.apply(relu_derivative));
+
         // initialise gradient tensors
         std::vector<Tensor3D> d_weights;
         std::vector<Tensor3D> d_bias;
@@ -602,13 +627,13 @@ class ConvolutionLayer : public Layer {
 
         // pad d_output for full convolution
         int pad_amount = (kernel_size - 1) / 2;
-        Tensor3D padded_d_output = Tensor3D::pad(d_output, pad_amount);
+        Tensor3D padded_d_z = Tensor3D::pad(d_z, pad_amount);
 
         for (int in_ch = 0; in_ch < input.depth; in_ch++) {
             // sum contributions from all output channels
             for (int k = 0; k < weights.size(); k++) {
                 // extract relevant delta channel and kernel slice
-                Tensor3D relevant_d_z_slice = padded_d_output.get_depth_slice(k);
+                Tensor3D relevant_d_z_slice = padded_d_z.get_depth_slice(k);
                 Tensor3D relevant_kernel_slice = weights[k].get_depth_slice(in_ch).rotate_180();
 
                 // perform full convolution
@@ -624,19 +649,18 @@ class ConvolutionLayer : public Layer {
         }
 
         // compute weight gradients
+
+        Tensor3D padded_input = Tensor3D::pad(input, pad_amount);
+
         for (int k = 0; k < weights.size(); k++) {
             Tensor3D d_weight(input.depth, kernel_size, kernel_size);
-
-            // pad input for full convolution
-            Tensor3D padded_input = Tensor3D::pad(input, pad_amount);
-
             for (int in_ch = 0; in_ch < input.depth; in_ch++) {
                 // extract relevant input and gradient channels
-                Tensor3D input_channel = padded_input.get_depth_slice(in_ch);
-                Tensor3D d_output_channel = d_output.get_depth_slice(k);
+                Tensor3D padded_input_channel = padded_input.get_depth_slice(in_ch);
+                Tensor3D d_z_channel = d_z.get_depth_slice(k);
 
                 // compute gradient for this input-output channel pair
-                Tensor3D channel_grad = Tensor3D::Conv(input_channel, d_output_channel);
+                Tensor3D channel_grad = Tensor3D::Conv(padded_input_channel, d_z_channel);
                 d_weight.set_depth_slice(in_ch, channel_grad);
             }
             d_weights.push_back(d_weight);
@@ -645,7 +669,7 @@ class ConvolutionLayer : public Layer {
             double d_bias_val = 0.0;
             for (int y = 0; y < d_output.height; y++) {
                 for (int x = 0; x < d_output.width; x++) {
-                    d_bias_val += d_output.data[k][y][x];
+                    d_bias_val += d_z.data[k][y][x];
                 }
             }
             Tensor3D bias_grad(1, 1, 1);
@@ -839,13 +863,13 @@ class SGDOptimiser : public Optimiser {
             for (int weight_index = 0; weight_index < weight_gradients.size(); weight_index++) {
                 // update the corresponding layer's corresponding weight Tensor
                 (layers[layer_index])->weights[weight_index] =
-                    (layers[layer_index])->weights[weight_index] - weight_gradients[weight_index] * learning_rate;
+                    (layers[layer_index])->weights[weight_index] - (weight_gradients[weight_index] * learning_rate);
             }
 
             for (int bias_index = 0; bias_index < bias_gradients.size(); bias_index++) {
                 // update the corresponding layer's corresponding bias Tensor
                 (layers[layer_index])->biases[bias_index] =
-                    (layers[layer_index])->biases[bias_index] - bias_gradients[bias_index] * learning_rate;
+                    (layers[layer_index])->biases[bias_index] - (bias_gradients[bias_index] * learning_rate);
             }
         }
     }
@@ -853,7 +877,7 @@ class SGDOptimiser : public Optimiser {
 
 // ---------------------------------- NEURAL NETWORK -------------------------------------------
 class NeuralNetwork {
-   private:
+private:
     struct LayerSpec {
         enum Type { CONV, POOL, DENSE } type;
 
@@ -940,7 +964,7 @@ class NeuralNetwork {
         layers_created = true;
     }
 
-   public:
+public:
     std::vector<LayerSpec> layer_specs;
     std::vector<std::unique_ptr<Layer>> layers;
     std::unique_ptr<Optimiser> optimiser;
@@ -1127,22 +1151,19 @@ int main() {
         }
     }
 
-    int kernel_size = 3;
     
     // network architecture setup
     NeuralNetwork nn;
-    nn.add_conv_layer(3, 3);
+    nn.add_conv_layer(32, 3);
     nn.add_pool_layer();
-    nn.add_conv_layer(7, 5);
-    nn.add_pool_layer();
-    nn.add_dense_layer(20);
+    nn.add_dense_layer(100);
     nn.add_dense_layer(10, "softmax");
     nn.set_loss(std::make_unique<CrossEntropyLoss>());
     nn.set_optimiser(std::make_unique<SGDOptimiser>(0.01));
 
     // training hyperparameters
     const int num_epochs = 10;
-    const int batch_size = 32;
+    const int batch_size = 100;
     const int batches_per_epoch = training_set.size() / batch_size;
     
     // training loop
@@ -1201,7 +1222,7 @@ int main() {
             nn.optimiser->compute_and_apply_updates(nn.layers, batch_gradients);
             
             // print batch progress
-            if (batch % 10 == 0) {
+            if (batch % 5 == 0) {
                 std::cout << "epoch " << epoch + 1 << "/" << num_epochs 
                          << ", batch " << batch << "/" << batches_per_epoch 
                          << ", loss: " << batch_loss << '\n';
