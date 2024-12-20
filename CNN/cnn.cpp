@@ -1231,6 +1231,9 @@ class NeuralNetwork {
 // batch normalisation
 // dropout
 
+// INTERACTIVE DRAWING DIGIT RECOGNITION ON WEBSITE 
+
+
 int main() {
     std::vector<std::vector<Tensor3D>> training_set;
     training_set.reserve(9000);
