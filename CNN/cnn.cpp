@@ -1094,8 +1094,8 @@ class NeuralNetwork {
                     layers.push_back(std::make_unique<PoolingLayer>(spec.pool_size, spec.pool_stride, spec.pool_mode));
 
                     // update 'previous' layer dimensions with formula for pooling layer output dimensions
-                    dims.height = std::ceil((dims.height - spec.pool_size) / static_cast<double>(spec.pool_stride) + 1);
-                    dims.width = std::ceil((dims.width - spec.pool_size) / static_cast<double>(spec.pool_stride) + 1);
+                    dims.height = std::floor((dims.height - spec.pool_size) / static_cast<double>(spec.pool_stride) + 1);
+                    dims.width = std::floor((dims.width - spec.pool_size) / static_cast<double>(spec.pool_stride) + 1);
                     break;
                 }
                 case LayerSpec::DENSE: {
@@ -1454,7 +1454,11 @@ int main() {
 
     // network architecture setup
     NeuralNetwork nn;
-    nn.add_conv_layer(32, 3);
+    nn.add_conv_layer(3, 3);
+    nn.add_pool_layer();
+    nn.add_conv_layer(4, 3);
+    nn.add_pool_layer();
+    nn.add_conv_layer(5, 3);
     nn.add_pool_layer();
     nn.add_dense_layer(100);
     nn.add_dense_layer(10, "softmax");
