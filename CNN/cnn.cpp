@@ -882,7 +882,7 @@ class AdamWOptimiser : public Optimiser {
     double beta2;
     double epsilon;
     double weight_decay;
-    int t;                                 // timestep
+    int t;                                                                   // timestep
     std::vector<std::pair<std::vector<Tensor3D>, std::vector<Tensor3D>>> m;  // first moment
     std::vector<std::pair<std::vector<Tensor3D>, std::vector<Tensor3D>>> v;  // second moment
 
@@ -910,26 +910,26 @@ class AdamWOptimiser : public Optimiser {
     void initialize_moments(const std::vector<std::unique_ptr<Layer>> &layers) {
         m.clear();
         v.clear();
-        
+
         // iterate through each layer
-        for (const auto& layer : layers) {
+        for (const auto &layer : layers) {
             std::vector<Tensor3D> layer_weight_m, layer_weight_v;
             std::vector<Tensor3D> layer_bias_m, layer_bias_v;
-            
+
             // initialize moments for weights
-            for (const auto& weight : layer->weights) {
+            for (const auto &weight : layer->weights) {
                 Tensor3D zero_tensor(weight.depth, weight.height, weight.width);
                 layer_weight_m.push_back(zero_tensor);
                 layer_weight_v.push_back(zero_tensor);
             }
-            
+
             // initialize moments for biases
-            for (const auto& bias : layer->biases) {
+            for (const auto &bias : layer->biases) {
                 Tensor3D zero_tensor(bias.depth, bias.height, bias.width);
                 layer_bias_m.push_back(zero_tensor);
                 layer_bias_v.push_back(zero_tensor);
             }
-            
+
             // store the moments for this layer
             m.push_back({layer_weight_m, layer_bias_m});
             v.push_back({layer_weight_v, layer_bias_v});
@@ -944,22 +944,24 @@ class AdamWOptimiser : public Optimiser {
     void compute_and_apply_updates(
         const std::vector<std::unique_ptr<Layer>> &layers,
         const std::vector<std::pair<std::vector<Tensor3D>, std::vector<Tensor3D>>> &gradients) override {
-
         if (m.empty() or v.empty()) {
             initialize_moments(layers);
         }
 
         t++;  // increment timestep
 
-        for (size_t layer_index = 0; layer_index < layers.size(); ++layer_index) {            
+        for (size_t layer_index = 0; layer_index < layers.size(); ++layer_index) {
             // calculate updates for each weight parameter
             for (int param_no = 0; param_no < m[layer_index].first.size(); ++param_no) {
                 // update biased first moment estimate
-                m[layer_index].first[param_no] = m[layer_index].first[param_no] * beta1 + gradients[layer_index].first[param_no] * (1.0 - beta1);
+                m[layer_index].first[param_no] =
+                    m[layer_index].first[param_no] * beta1 + gradients[layer_index].first[param_no] * (1.0 - beta1);
 
                 // update biased second raw moment estimate
-                v[layer_index].first[param_no] = v[layer_index].first[param_no] * beta2 + gradients[layer_index].first[param_no].hadamard(gradients[layer_index].first[param_no]) * (1.0 - beta2);
-            
+                v[layer_index].first[param_no] =
+                    v[layer_index].first[param_no] * beta2 +
+                    gradients[layer_index].first[param_no].hadamard(gradients[layer_index].first[param_no]) * (1.0 - beta2);
+
                 // compute bias-corrected first moment estimate
                 Tensor3D m_hat = m[layer_index].first[param_no] * (1.0 / (1.0 - std::pow(beta1, t)));
 
@@ -970,20 +972,23 @@ class AdamWOptimiser : public Optimiser {
                 Tensor3D update = m_hat.hadamard(v_hat.apply([this](double x) { return 1.0 / (std::sqrt(x) + epsilon); }));
 
                 // apply weight decay
-                layers[layer_index]->weights[param_no] = layers[layer_index]->weights[param_no] * (1.0 - learning_rate * weight_decay);
+                layers[layer_index]->weights[param_no] =
+                    layers[layer_index]->weights[param_no] * (1.0 - learning_rate * weight_decay);
                 // apply Adam update
                 layers[layer_index]->weights[param_no] = layers[layer_index]->weights[param_no] - (update * learning_rate);
-            
             }
 
             // calculate updates for each bias parameter
             for (int param_no = 0; param_no < m[layer_index].second.size(); ++param_no) {
                 // update biased first moment estimate
-                m[layer_index].second[param_no] = m[layer_index].second[param_no] * beta1 + gradients[layer_index].second[param_no] * (1.0 - beta1);
+                m[layer_index].second[param_no] =
+                    m[layer_index].second[param_no] * beta1 + gradients[layer_index].second[param_no] * (1.0 - beta1);
 
                 // update biased second raw moment estimate
-                v[layer_index].second[param_no] = v[layer_index].second[param_no] * beta2 + gradients[layer_index].second[param_no].hadamard(gradients[layer_index].second[param_no]) * (1.0 - beta2);
-            
+                v[layer_index].second[param_no] =
+                    v[layer_index].second[param_no] * beta2 +
+                    gradients[layer_index].second[param_no].hadamard(gradients[layer_index].second[param_no]) * (1.0 - beta2);
+
                 // compute bias-corrected first moment estimate
                 Tensor3D m_hat = m[layer_index].second[param_no] * (1.0 / (1.0 - std::pow(beta1, t)));
 
@@ -992,12 +997,11 @@ class AdamWOptimiser : public Optimiser {
 
                 // compute the Adam update
                 Tensor3D update = m_hat.hadamard(v_hat.apply([this](double x) { return 1.0 / (std::sqrt(x) + epsilon); }));
-                
+
                 // no weight decay for biases
 
                 // apply Adam update
                 layers[layer_index]->biases[param_no] = layers[layer_index]->biases[param_no] - (update * learning_rate);
-            
             }
         }
     }
@@ -1055,6 +1059,19 @@ class NeuralNetwork {
         size_t height;
         size_t width;
         size_t depth;
+    };
+
+    struct EvalMetrics {
+        double accuracy;
+        double precision;
+        double recall;
+        double f1_score;
+
+        friend std::ostream &operator<<(std::ostream &os, const EvalMetrics &metrics) {
+            os << "accuracy: " << metrics.accuracy << ", precision: " << metrics.precision << ", recall: " << metrics.recall
+               << ", f1_score: " << metrics.f1_score;
+            return os;
+        }
     };
 
     void create_layers(const Tensor3D &input) {
@@ -1222,17 +1239,171 @@ class NeuralNetwork {
 
         return all_gradients;
     }
+
+    EvalMetrics evaluate(const std::vector<std::vector<Tensor3D>> &eval_set) {
+        // initialise counts for metrics
+        int total_samples = 0;
+        int correct_predictions = 0;
+        std::vector<int> true_positives(10, 0);
+        std::vector<int> false_positives(10, 0);
+        std::vector<int> false_negatives(10, 0);
+
+        // evaluate each sample
+        for (const auto &sample : eval_set) {
+            const auto &input = sample[0];
+            const auto &target = sample[1];
+
+            // get network prediction
+            Tensor3D predicted = feedforward(input);
+
+            // find predicted and actual class
+            int predicted_class = 0;
+            int actual_class = 0;
+            double max_pred = predicted.data[0][0][0];
+            double max_target = target.data[0][0][0];
+
+            for (int i = 1; i < 10; ++i) {
+                if (predicted.data[0][i][0] > max_pred) {
+                    max_pred = predicted.data[0][i][0];
+                    predicted_class = i;
+                }
+                if (target.data[0][i][0] > max_target) {
+                    max_target = target.data[0][i][0];
+                    actual_class = i;
+                }
+            }
+
+            // update counts
+            total_samples++;
+            if (predicted_class == actual_class) {
+                correct_predictions++;
+                true_positives[actual_class]++;
+            } else {
+                false_positives[predicted_class]++;
+                false_negatives[actual_class]++;
+            }
+        }
+
+        // calculate metrics
+        double accuracy = static_cast<double>(correct_predictions) / total_samples;
+
+        // calculate macro-averaged precision, recall and f1
+        double total_precision = 0.0;
+        double total_recall = 0.0;
+        double total_f1 = 0.0;
+        int num_classes = 0;
+
+        for (int i = 0; i < 10; ++i) {
+            // skip classes with no samples to avoid division by zero
+            if (true_positives[i] + false_positives[i] + false_negatives[i] == 0) {
+                continue;
+            }
+
+            double class_precision = true_positives[i] / static_cast<double>(true_positives[i] + false_positives[i]);
+            double class_recall = true_positives[i] / static_cast<double>(true_positives[i] + false_negatives[i]);
+            double class_f1 = 2 * (class_precision * class_recall) / (class_precision + class_recall);
+
+            // handle cases where precision + recall = 0
+            if (std::isnan(class_f1)) {
+                class_f1 = 0.0;
+            }
+
+            total_precision += class_precision;
+            total_recall += class_recall;
+            total_f1 += class_f1;
+            num_classes++;
+        }
+
+        // compute macro averages
+        double macro_precision = total_precision / num_classes;
+        double macro_recall = total_recall / num_classes;
+        double macro_f1 = total_f1 / num_classes;
+
+        return {accuracy, macro_precision, macro_recall, macro_f1};
+    }
+
+    void train(std::vector<std::vector<Tensor3D>> &training_set,
+               const std::vector<std::vector<Tensor3D>> &eval_set,
+               const int num_epochs,
+               const int batch_size) {
+
+        const int batches_per_epoch = training_set.size() / batch_size;
+        // training loop
+        for (int epoch = 0; epoch < num_epochs; ++epoch) {
+            // shuffle training data at start of each epoch
+            std::shuffle(training_set.begin(), training_set.end(), std::random_device());
+
+            double epoch_loss = 0.0;
+
+            // batch loop
+            for (int batch = 0; batch < batches_per_epoch; ++batch) {
+                std::vector<std::pair<std::vector<Tensor3D>, std::vector<Tensor3D>>> batch_gradients;
+                double batch_loss = 0.0;
+
+                // accumulate gradients over batch
+                for (int i = 0; i < batch_size; ++i) {
+                    int idx = batch * batch_size + i;
+                    auto &input = training_set[idx][0];
+                    auto &target = training_set[idx][1];
+
+                    // accumulate gradients
+                    auto gradients = calculate_gradients(input, target);
+
+                    // initialise batch_gradients if first sample
+                    if (i == 0) {
+                        batch_gradients = gradients;
+                    } else {
+                        // add gradients element-wise
+                        for (size_t layer = 0; layer < gradients.size(); ++layer) {
+                            for (size_t w = 0; w < gradients[layer].first.size(); ++w) {
+                                batch_gradients[layer].first[w] = batch_gradients[layer].first[w] + gradients[layer].first[w];
+                            }
+                            for (size_t b = 0; b < gradients[layer].second.size(); ++b) {
+                                batch_gradients[layer].second[b] = batch_gradients[layer].second[b] + gradients[layer].second[b];
+                            }
+                        }
+                    }
+
+                    // accumulate loss
+                    batch_loss += loss->compute(feedforward(input), target);
+                }
+
+                // average gradients and loss over batch
+                for (auto &layer_grads : batch_gradients) {
+                    for (auto &w_grad : layer_grads.first) {
+                        w_grad = w_grad * (1.0 / batch_size);
+                    }
+                    for (auto &b_grad : layer_grads.second) {
+                        b_grad = b_grad * (1.0 / batch_size);
+                    }
+                }
+                batch_loss /= batch_size;
+                epoch_loss += batch_loss;
+
+                // apply averaged gradients
+                optimiser->compute_and_apply_updates(layers, batch_gradients);
+
+                // print batch progress
+                if (batch % 10 == 0) {
+                    EvalMetrics metrics = evaluate(eval_set);
+                    std::cout << "epoch " << epoch + 1 << ", batch " << batch << "/" << batches_per_epoch << ": " << metrics << std::endl;
+                }
+            }
+
+            
+        }
+    }
 };
 
 // todo:
+// evaluation on test set
 // implement other modes than same
 // implement different strides in convlayer
 // change to float values in Tensor3D
 // batch normalisation
 // dropout
 
-// INTERACTIVE DRAWING DIGIT RECOGNITION ON WEBSITE 
-
+// INTERACTIVE DRAWING DIGIT RECOGNITION ON WEBSITE
 
 int main() {
     std::vector<std::vector<Tensor3D>> training_set;
@@ -1293,70 +1464,8 @@ int main() {
     // training hyperparameters
     const int num_epochs = 10;
     const int batch_size = 100;
-    const int batches_per_epoch = training_set.size() / batch_size;
 
-    // training loop
-    for (int epoch = 0; epoch < num_epochs; ++epoch) {
-        // shuffle training data at start of each epoch
-        std::shuffle(training_set.begin(), training_set.end(), std::random_device());
-
-        double epoch_loss = 0.0;
-
-        // batch loop
-        for (int batch = 0; batch < batches_per_epoch; ++batch) {
-            std::vector<std::pair<std::vector<Tensor3D>, std::vector<Tensor3D>>> batch_gradients;
-            double batch_loss = 0.0;
-
-            // accumulate gradients over batch
-            for (int i = 0; i < batch_size; ++i) {
-                int idx = batch * batch_size + i;
-                auto &input = training_set[idx][0];
-                auto &target = training_set[idx][1];
-
-                // accumulate gradients
-                auto gradients = nn.calculate_gradients(input, target);
-
-                // initialise batch_gradients if first sample
-                if (i == 0) {
-                    batch_gradients = gradients;
-                } else {
-                    // add gradients element-wise
-                    for (size_t layer = 0; layer < gradients.size(); ++layer) {
-                        for (size_t w = 0; w < gradients[layer].first.size(); ++w) {
-                            batch_gradients[layer].first[w] = batch_gradients[layer].first[w] + gradients[layer].first[w];
-                        }
-                        for (size_t b = 0; b < gradients[layer].second.size(); ++b) {
-                            batch_gradients[layer].second[b] = batch_gradients[layer].second[b] + gradients[layer].second[b];
-                        }
-                    }
-                }
-
-                // accumulate loss
-                batch_loss += nn.loss->compute(nn.feedforward(input), target);
-            }
-
-            // average gradients and loss over batch
-            for (auto &layer_grads : batch_gradients) {
-                for (auto &w_grad : layer_grads.first) {
-                    w_grad = w_grad * (1.0 / batch_size);
-                }
-                for (auto &b_grad : layer_grads.second) {
-                    b_grad = b_grad * (1.0 / batch_size);
-                }
-            }
-            batch_loss /= batch_size;
-            epoch_loss += batch_loss;
-
-            // apply averaged gradients
-            nn.optimiser->compute_and_apply_updates(nn.layers, batch_gradients);
-
-            // print batch progress
-            if (batch % 5 == 0) {
-                std::cout << "epoch " << epoch + 1 << "/" << num_epochs << ", batch " << batch << "/" << batches_per_epoch
-                          << ", loss: " << batch_loss << '\n';
-            }
-        }
-    }
+    nn.train(training_set, eval_set, num_epochs, batch_size);
 
     std::cout << "Training complete" << std::endl;
 }
