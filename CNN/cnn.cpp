@@ -74,8 +74,10 @@ class Tensor3D {
         int kernel_height_offset = (kernel.height - 1) / 2;
 
         // check if the proceeding loop will be out of range for the input kernel
-        if (abs(start_x) < kernel_width_offset or abs(start_x - data[0][0].size()) < kernel_width_offset or
-            abs(start_y) < kernel_height_offset or abs(start_y - data[0].size()) < kernel_height_offset) {
+        if (std::abs(static_cast<int>(start_x)) < kernel_width_offset or 
+            std::abs(static_cast<int>(start_x - data[0][0].size())) < kernel_width_offset or
+            std::abs(static_cast<int>(start_y)) < kernel_height_offset or 
+            std::abs(static_cast<int>(start_y - data[0].size())) < kernel_height_offset) {
             throw std::runtime_error("Cannot compute dot product at this postition - index would be out of range in convolution");
         }
 
@@ -524,7 +526,7 @@ class DenseLayer : public Layer {
         return a;
     }
 
-    BackwardReturn backward(const Tensor3D &d_output) {
+    BackwardReturn backward(const Tensor3D &d_output) override{
         Tensor3D d_activation;
         Tensor3D d_z;
 
@@ -1581,6 +1583,26 @@ class NeuralNetwork {
         return nn;
     }
 
+    // method for WASM interface for interactive demo
+    std::vector<double> predict_digit(const std::vector<double>& input_data) {
+        // convert flat vector to Tensor3D (assuming MNIST 28x28 input)
+        Tensor3D input(1, 28, 28);
+        for (int i = 0; i < 28; i++) {
+            for (int j = 0; j < 28; j++) {
+                input.data[0][i][j] = input_data[i * 28 + j];
+            }
+        }
+
+        // get prediction
+        Tensor3D output = feedforward(input);
+        
+        // convert output to vector
+        std::vector<double> result(10);
+        for (int i = 0; i < 10; i++) {
+            result[i] = output.data[0][i][0];
+        }
+        return result;
+    }
 };
 
 // todo:
@@ -1649,22 +1671,25 @@ int main() {
 
     // network architecture setup
     NeuralNetwork nn;
-    nn.add_conv_layer(2, 3);
+    nn.add_conv_layer(8, 3);
     nn.add_pool_layer();
-    nn.add_conv_layer(1, 3);
+    nn.add_conv_layer(16, 3);
     nn.add_pool_layer();
-    nn.add_dense_layer(30);
+    nn.add_conv_layer(32, 3);
+    nn.add_pool_layer();
+    nn.add_dense_layer(100);
     nn.add_dense_layer(10, "softmax");
     nn.set_loss(std::make_unique<CrossEntropyLoss>());
     nn.set_optimiser(std::make_unique<AdamWOptimiser>());
 
     // training hyperparameters
-    const int num_epochs = 1;
+    const int num_epochs = 3;
     const int batch_size = 100;
 
     nn.train(training_set, eval_set, num_epochs, batch_size);
-    nn.save_model("model.bin");
+    std::cout << "Training complete\n" << std::endl;
 
-    std::cout << "Training complete\n\n" << std::endl;
+    nn.save_model("model.bin");
+    std::cout << "Model saved to model.bin\n\n" << std::endl;
     return 0;
 }
