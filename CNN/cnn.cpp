@@ -1405,15 +1405,16 @@ class NeuralNetwork {
 
 // INTERACTIVE DRAWING DIGIT RECOGNITION ON WEBSITE
 
-int main() {
+std::pair<std::vector<std::vector<Tensor3D>>, std::vector<std::vector<Tensor3D>>> load_mnist_data(std::string path_to_data) {
+    // create training set from binary image data files
+    
     std::vector<std::vector<Tensor3D>> training_set;
     training_set.reserve(9000);
     std::vector<std::vector<Tensor3D>> eval_set;
-    training_set.reserve(1000);
+    eval_set.reserve(1000);
 
-    // create training set from binary image data files
     for (int i = 0; i < 10; ++i) {
-        std::string file_path = "../mnist data/data" + std::to_string(i) + ".dat";
+        std::string file_path = path_to_data + "/data" + std::to_string(i) + ".dat";
         std::vector<unsigned char> full_digit_data = read_file(file_path);
 
         for (int j = 0; j < 784000; j += 28 * 28) {  // todo make more general with training ratio
@@ -1451,15 +1452,22 @@ int main() {
             }
         }
     }
+    return {training_set, eval_set};
+}
+
+int main() {
+    
+    auto [training_set, eval_set] = load_mnist_data("../mnist data");
 
     // network architecture setup
     NeuralNetwork nn;
-    nn.add_conv_layer(3, 3);
+    nn.add_conv_layer(16, 3);
     nn.add_pool_layer();
-    nn.add_conv_layer(4, 3);
+    nn.add_conv_layer(32, 3);
     nn.add_pool_layer();
-    nn.add_conv_layer(5, 3);
+    nn.add_conv_layer(64, 3);
     nn.add_pool_layer();
+    nn.add_dense_layer(200);
     nn.add_dense_layer(100);
     nn.add_dense_layer(10, "softmax");
     nn.set_loss(std::make_unique<CrossEntropyLoss>());
