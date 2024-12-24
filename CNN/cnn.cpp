@@ -1061,19 +1061,6 @@ class NeuralNetwork {
         size_t depth;
     };
 
-    struct EvalMetrics {
-        double accuracy;
-        double precision;
-        double recall;
-        double f1_score;
-
-        friend std::ostream &operator<<(std::ostream &os, const EvalMetrics &metrics) {
-            os << "accuracy: " << metrics.accuracy << ", precision: " << metrics.precision << ", recall: " << metrics.recall
-               << ", f1_score: " << metrics.f1_score;
-            return os;
-        }
-    };
-
     void create_layers(const Tensor3D &input) {
         // stores the dimensions of the previous layer
         LayerDimensions dims = {input.height, input.width, input.depth};
@@ -1109,7 +1096,55 @@ class NeuralNetwork {
         layers_created = true;
     }
 
+    // helper functions for saving/loading Tensor3D
+    static void save_tensor(std::ofstream& file, const Tensor3D& tensor) {
+        uint32_t depth = static_cast<uint32_t>(tensor.depth);
+        uint32_t height = static_cast<uint32_t>(tensor.height);
+        uint32_t width = static_cast<uint32_t>(tensor.width);
+        
+        file.write(reinterpret_cast<const char*>(&depth), sizeof(depth));
+        file.write(reinterpret_cast<const char*>(&height), sizeof(height));
+        file.write(reinterpret_cast<const char*>(&width), sizeof(width));
+        
+        for (const auto& channel : tensor.data) {
+            for (const auto& row : channel) {
+                file.write(reinterpret_cast<const char*>(row.data()), row.size() * sizeof(double));
+            }
+        }
+    }
+
+    static void load_tensor(std::ifstream& file, Tensor3D& tensor) {
+        uint32_t depth, height, width;
+        file.read(reinterpret_cast<char*>(&depth), sizeof(depth));
+        file.read(reinterpret_cast<char*>(&height), sizeof(height));
+        file.read(reinterpret_cast<char*>(&width), sizeof(width));
+        
+        tensor = Tensor3D(depth, height, width);
+        
+        for (auto& channel : tensor.data) {
+            for (auto& row : channel) {
+                file.read(reinterpret_cast<char*>(row.data()), row.size() * sizeof(double));
+            }
+        }
+    }
+
+
    public:
+
+    struct EvalMetrics {
+        double accuracy;
+        double precision;
+        double recall;
+        double f1_score;
+
+        friend std::ostream &operator<<(std::ostream &os, const EvalMetrics &metrics) {
+            os << "accuracy: " << metrics.accuracy << ", precision: " << metrics.precision << ", recall: " << metrics.recall
+               << ", f1_score: " << metrics.f1_score;
+            return os;
+        }
+    };
+
+
     std::vector<LayerSpec> layer_specs;
     std::vector<std::unique_ptr<Layer>> layers;
     std::unique_ptr<Optimiser> optimiser;
@@ -1393,6 +1428,159 @@ class NeuralNetwork {
             
         }
     }
+
+    // save model to file - must be called after training/forward pass
+    void save_model(const std::string filename) const {
+        std::ofstream file(filename, std::ios::binary);
+        if (!file) {
+            throw std::runtime_error("unable to open file for writing: " + filename);
+        }
+
+        // write number of layers
+        uint32_t num_layers = static_cast<uint32_t>(layers.size());
+        file.write(reinterpret_cast<const char*>(&num_layers), sizeof(num_layers));
+
+        // write layer specifications
+        for (const auto& layer : layers) {
+            // write layer type
+            uint32_t layer_type;
+            if (dynamic_cast<ConvolutionLayer*>(layer.get())) {
+                layer_type = 0;
+            } else if (dynamic_cast<PoolingLayer*>(layer.get())) {
+                layer_type = 1;
+            } else if (dynamic_cast<DenseLayer*>(layer.get())) {
+                layer_type = 2;
+            }
+            file.write(reinterpret_cast<const char*>(&layer_type), sizeof(layer_type));
+
+            // write layer-specific parameters
+            if (auto conv_layer = dynamic_cast<ConvolutionLayer*>(layer.get())) {
+                uint32_t channels_in = static_cast<uint32_t>(conv_layer->channels_in);
+                uint32_t out_channels = static_cast<uint32_t>(conv_layer->out_channels);
+                uint32_t kernel_size = static_cast<uint32_t>(conv_layer->kernel_size);
+                uint32_t mode_length = static_cast<uint32_t>(conv_layer->mode.length());
+
+                file.write(reinterpret_cast<const char*>(&channels_in), sizeof(channels_in));
+                file.write(reinterpret_cast<const char*>(&out_channels), sizeof(out_channels));
+                file.write(reinterpret_cast<const char*>(&kernel_size), sizeof(kernel_size));
+                file.write(reinterpret_cast<const char*>(&mode_length), sizeof(mode_length));
+                file.write(conv_layer->mode.c_str(), mode_length);
+
+                // save weights and biases
+                for (const auto& weight : conv_layer->weights) {
+                    save_tensor(file, weight);
+                }
+                for (const auto& bias : conv_layer->biases) {
+                    save_tensor(file, bias);
+                }
+            } 
+            else if (auto pool_layer = dynamic_cast<PoolingLayer*>(layer.get())) {
+                uint32_t kernel_size = static_cast<uint32_t>(pool_layer->kernel_size);
+                uint32_t stride = static_cast<uint32_t>(pool_layer->stride);
+                uint32_t mode_length = static_cast<uint32_t>(pool_layer->mode.length());
+
+                file.write(reinterpret_cast<const char*>(&kernel_size), sizeof(kernel_size));
+                file.write(reinterpret_cast<const char*>(&stride), sizeof(stride));
+                file.write(reinterpret_cast<const char*>(&mode_length), sizeof(mode_length));
+                file.write(pool_layer->mode.c_str(), mode_length);
+            }
+            else if (auto dense_layer = dynamic_cast<DenseLayer*>(layer.get())) {
+                uint32_t input_size = static_cast<uint32_t>(dense_layer->weights[0].width);
+                uint32_t output_size = static_cast<uint32_t>(dense_layer->weights[0].height);
+                uint32_t activation_length = static_cast<uint32_t>(dense_layer->activation_function.length());
+
+                file.write(reinterpret_cast<const char*>(&input_size), sizeof(input_size));
+                file.write(reinterpret_cast<const char*>(&output_size), sizeof(output_size));
+                file.write(reinterpret_cast<const char*>(&activation_length), sizeof(activation_length));
+                file.write(dense_layer->activation_function.c_str(), activation_length);
+
+                // save weights and biases
+                for (const auto& weight : dense_layer->weights) {
+                    save_tensor(file, weight);
+                }
+                for (const auto& bias : dense_layer->biases) {
+                    save_tensor(file, bias);
+                }
+            }
+        }
+    }
+
+    static NeuralNetwork load_model(const std::string& filename) {
+        std::ifstream file(filename, std::ios::binary);
+        if (!file) {
+            throw std::runtime_error("unable to open file for reading: " + filename);
+        }
+
+        NeuralNetwork nn;
+
+        // read number of layers
+        uint32_t num_layers;
+        file.read(reinterpret_cast<char*>(&num_layers), sizeof(num_layers));
+
+        // read and create each layer
+        for (uint32_t i = 0; i < num_layers; ++i) {
+            uint32_t layer_type;
+            file.read(reinterpret_cast<char*>(&layer_type), sizeof(layer_type));
+
+            if (layer_type == 0) {  // ConvolutionLayer
+                uint32_t channels_in, out_channels, kernel_size, mode_length;
+                file.read(reinterpret_cast<char*>(&channels_in), sizeof(channels_in));
+                file.read(reinterpret_cast<char*>(&out_channels), sizeof(out_channels));
+                file.read(reinterpret_cast<char*>(&kernel_size), sizeof(kernel_size));
+                file.read(reinterpret_cast<char*>(&mode_length), sizeof(mode_length));
+
+                std::string mode(mode_length, '\0');
+                file.read(&mode[0], mode_length);
+
+                auto layer = std::make_unique<ConvolutionLayer>(channels_in, out_channels, kernel_size, mode);
+                
+                // load weights and biases
+                for (auto& weight : layer->weights) {
+                    load_tensor(file, weight);
+                }
+                for (auto& bias : layer->biases) {
+                    load_tensor(file, bias);
+                }
+                
+                nn.layers.push_back(std::move(layer));
+            }
+            else if (layer_type == 1) {  // PoolingLayer
+                uint32_t kernel_size, stride, mode_length;
+                file.read(reinterpret_cast<char*>(&kernel_size), sizeof(kernel_size));
+                file.read(reinterpret_cast<char*>(&stride), sizeof(stride));
+                file.read(reinterpret_cast<char*>(&mode_length), sizeof(mode_length));
+
+                std::string mode(mode_length, '\0');
+                file.read(&mode[0], mode_length);
+
+                nn.layers.push_back(std::make_unique<PoolingLayer>(kernel_size, stride, mode));
+            }
+            else if (layer_type == 2) {  // DenseLayer
+                uint32_t input_size, output_size, activation_length;
+                file.read(reinterpret_cast<char*>(&input_size), sizeof(input_size));
+                file.read(reinterpret_cast<char*>(&output_size), sizeof(output_size));
+                file.read(reinterpret_cast<char*>(&activation_length), sizeof(activation_length));
+
+                std::string activation(activation_length, '\0');
+                file.read(&activation[0], activation_length);
+
+                auto layer = std::make_unique<DenseLayer>(input_size, output_size, activation);
+                
+                // load weights and biases
+                for (auto& weight : layer->weights) {
+                    load_tensor(file, weight);
+                }
+                for (auto& bias : layer->biases) {
+                    load_tensor(file, bias);
+                }
+                
+                nn.layers.push_back(std::move(layer));
+            }
+        }
+
+        return nn;
+    }
+
 };
 
 // todo:
@@ -1461,23 +1649,22 @@ int main() {
 
     // network architecture setup
     NeuralNetwork nn;
-    nn.add_conv_layer(16, 3);
+    nn.add_conv_layer(2, 3);
     nn.add_pool_layer();
-    nn.add_conv_layer(32, 3);
+    nn.add_conv_layer(1, 3);
     nn.add_pool_layer();
-    nn.add_conv_layer(64, 3);
-    nn.add_pool_layer();
-    nn.add_dense_layer(200);
-    nn.add_dense_layer(100);
+    nn.add_dense_layer(30);
     nn.add_dense_layer(10, "softmax");
     nn.set_loss(std::make_unique<CrossEntropyLoss>());
     nn.set_optimiser(std::make_unique<AdamWOptimiser>());
 
     // training hyperparameters
-    const int num_epochs = 10;
+    const int num_epochs = 1;
     const int batch_size = 100;
 
     nn.train(training_set, eval_set, num_epochs, batch_size);
+    nn.save_model("model.bin");
 
-    std::cout << "Training complete" << std::endl;
+    std::cout << "Training complete\n\n" << std::endl;
+    return 0;
 }
