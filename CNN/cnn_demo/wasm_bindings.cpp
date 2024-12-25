@@ -21,7 +21,7 @@ bool loadModel(const std::string path) {
 }
 
 // wrapper function to handle vector conversion
-std::vector<double> predict(const std::vector<double>& input) {
+std::vector<float> predict(const std::vector<float>& input) {
     if (!g_network) {
         throw std::runtime_error("model not loaded - call loadModel first");
     }
@@ -29,7 +29,7 @@ std::vector<double> predict(const std::vector<double>& input) {
 }
 
 EMSCRIPTEN_BINDINGS(cnn_module) {
-    register_vector<double>("VectorDouble");
+    register_vector<float>("VectorFloat");
     
     function("predict", &predict);
     function("loadModel", &loadModel);

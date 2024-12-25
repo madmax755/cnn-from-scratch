@@ -15,19 +15,19 @@
 // ---------------------------------- ACTIVATION FUNCTIONS -------------------------------------------
 
 // sigmoid activation function
-double sigmoid(double x) { return 1.0 / (1.0 + std::exp(-x)); }
+float sigmoid(float x) { return 1.0f / (1.0f + std::exp(-x)); }
 
 // sigmoid derivative
-double sigmoid_derivative(double x) {
-    double s = sigmoid(x);
-    return s * (1.0 - s);
+float sigmoid_derivative(float x) {
+    float s = sigmoid(x);
+    return s * (1.0f - s);
 }
 
 // relu activation function
-double relu(double x) { return std::max(x, 0.0); }
+float relu(float x) { return std::max(x, 0.0f); }
 
 // relu derivative
-double relu_derivative(double x) { return (x > 0) ? 1.0 : 0.0; }
+float relu_derivative(float x) { return (x > 0.0f) ? 1.0f : 0.0f; }
 
 // read binary file into a vector
 std::vector<unsigned char> read_file(const std::string &path) {
@@ -35,39 +35,32 @@ std::vector<unsigned char> read_file(const std::string &path) {
 
     if (file) {
         std::vector<unsigned char> buffer(std::istreambuf_iterator<char>(file), {});
-
-        // for (unsigned char byte : buffer) {
-        //     std::cout << static_cast<int>(byte) << " ";
-        // }
-        // std::cout << "\n";
-
         return buffer;
     } else {
         std::cout << "Error reading file " << path << "\n";
-
         return std::vector<unsigned char>();  // return an empty vector
     }
 }
 
 class Tensor3D {
    public:
-    std::vector<std::vector<std::vector<double>>> data;
+    std::vector<std::vector<std::vector<float>>> data;
     size_t height, width, depth;
 
     Tensor3D() : height(0), width(0), depth(0) {}
 
     // for compatability with old Tensor3D code
     Tensor3D(size_t rows, size_t cols) : depth(1), height(rows), width(cols) {
-        data.resize(depth, std::vector<std::vector<double>>(height, std::vector<double>(width, 0.0)));
+        data.resize(depth, std::vector<std::vector<float>>(height, std::vector<float>(width, 0.0f)));
     }
 
     Tensor3D(size_t depth, size_t height, size_t width) : height(height), width(width), depth(depth) {
-        data.resize(depth, std::vector<std::vector<double>>(height, std::vector<double>(width, 0.0)));
+        data.resize(depth, std::vector<std::vector<float>>(height, std::vector<float>(width, 0.0f)));
     }
 
     // compute dot product with a kernel centered at specific position - the argument must be the kernel
-    double dot_with_kernel_at_postion(const Tensor3D &kernel, size_t start_x, size_t start_y) const {
-        double sum = 0.0;
+    float dot_with_kernel_at_postion(const Tensor3D &kernel, size_t start_x, size_t start_y) const {
+        float sum = 0.0;
 
         // to facilitate start_x and start_y being the centre postion
         int kernel_width_offset = (kernel.width - 1) / 2;
@@ -111,8 +104,8 @@ class Tensor3D {
     void he_initialise() {
         std::random_device rd;
         std::mt19937 gen(rd());
-        double std_dev = std::sqrt(2.0 / (height * width * depth));
-        std::normal_distribution<> dis(0, std_dev);
+        float std_dev = std::sqrt(2.0f / (height * width * depth));
+        std::normal_distribution<float> dis(0.0f, std_dev);
 
         for (auto &channel : data) {
             for (auto &row : channel) {
@@ -126,8 +119,8 @@ class Tensor3D {
     void xavier_initialise() {
         std::random_device rd;
         std::mt19937 gen(rd());
-        double limit = std::sqrt(6.0 / (height * width * depth));
-        std::uniform_real_distribution<> dis(-limit, limit);
+        float limit = std::sqrt(6.0f / (height * width * depth));
+        std::uniform_real_distribution<float> dis(-limit, limit);
 
         for (auto &channel : data) {
             for (auto &row : channel) {
@@ -138,10 +131,10 @@ class Tensor3D {
         }
     }
 
-    void uniform_initialise(double lower_bound = 0.0, double upper_bound = 1.0) {
+    void uniform_initialise(float lower_bound = 0.0f, float upper_bound = 1.0f) {
         std::random_device rd;
         std::mt19937 gen(rd());
-        std::uniform_real_distribution<> dis(lower_bound, upper_bound);
+        std::uniform_real_distribution<float> dis(lower_bound, upper_bound);
 
         for (auto &channel : data) {
             for (auto &row : channel) {
@@ -156,7 +149,7 @@ class Tensor3D {
         for (auto &channel : data) {
             for (auto &row : channel) {
                 for (auto &val : row) {
-                    val = 0.0;
+                    val = 0.0f;
                 }
             }
         }
@@ -215,7 +208,7 @@ class Tensor3D {
         return result;
     }
 
-    Tensor3D operator+(const double &other) const {
+    Tensor3D operator+(const float &other) const {
         Tensor3D result(depth, height, width);
         for (size_t d = 0; d < depth; d++) {
             for (size_t i = 0; i < height; i++) {
@@ -243,7 +236,7 @@ class Tensor3D {
         return result;
     }
 
-    Tensor3D operator*(double scalar) const {
+    Tensor3D operator*(float scalar) const {
         Tensor3D result(depth, height, width);
         for (size_t d = 0; d < depth; d++) {
             for (size_t i = 0; i < height; i++) {
@@ -271,7 +264,7 @@ class Tensor3D {
         return result;
     }
 
-    Tensor3D apply(double (*func)(double)) const {
+    Tensor3D apply(float (*func)(float)) const {
         Tensor3D result(depth, height, width);
         for (size_t d = 0; d < depth; d++) {
             for (size_t i = 0; i < height; i++) {
@@ -314,13 +307,13 @@ class Tensor3D {
 
         for (size_t d = 0; d < depth; d++) {
             // find max across height (class scores)
-            double max_val = -std::numeric_limits<double>::infinity();
+            float max_val = -std::numeric_limits<float>::infinity();
             for (size_t h = 0; h < height; h++) {
                 max_val = std::max(max_val, data[d][h][0]);
             }
 
             // compute exp and sum across height
-            double sum = 0.0;
+            float sum = 0.0f;
             for (size_t h = 0; h < height; h++) {
                 result.data[d][h][0] = std::exp(data[d][h][0] - max_val);
                 sum += result.data[d][h][0];
@@ -388,7 +381,7 @@ class Tensor3D {
         // for each position in the output
         for (int y = 0; y < output.height; ++y) {
             for (int x = 0; x < output.width; ++x) {
-                double sum = 0.0;
+                float sum = 0.0f;
 
                 // sum over all channels and kernel positions
                 for (int d = 0; d < input.depth; ++d) {
@@ -668,7 +661,7 @@ class ConvolutionLayer : public Layer {
             d_weights.push_back(d_weight);
 
             // compute bias gradient (sum of d_output)
-            double d_bias_val = 0.0;
+            float d_bias_val = 0.0f;
             for (int y = 0; y < d_output.height; y++) {
                 for (int x = 0; x < d_output.width; x++) {
                     d_bias_val += d_z.data[k][y][x];
@@ -724,7 +717,7 @@ class PoolingLayer : public Layer {
                         int end_x = std::min(start_x + kernel_size, static_cast<int>(input.width));
 
                         // find maximum in this window
-                        double max_val = -std::numeric_limits<double>::infinity();
+                        float max_val = -std::numeric_limits<float>::infinity();
                         int max_y = -1, max_x = -1;
                         for (int wy = start_y; wy < end_y; ++wy) {
                             for (int wx = start_x; wx < end_x; ++wx) {
@@ -793,20 +786,20 @@ class Loss {
     virtual ~Loss() = default;
 
     // Compute the loss value
-    virtual double compute(const Tensor3D &predicted, const Tensor3D &target) const = 0;
+    virtual float compute(const Tensor3D &predicted, const Tensor3D &target) const = 0;
 
     // Compute the derivative of the loss with respect to the predicted values
     virtual Tensor3D derivative(const Tensor3D &predicted, const Tensor3D &target) const = 0;
-};
+}; 
 
 class CrossEntropyLoss : public Loss {
    public:
-    double compute(const Tensor3D &predicted, const Tensor3D &target) const override {
-        double loss = 0.0;
+    float compute(const Tensor3D &predicted, const Tensor3D &target) const override {
+        float loss = 0.0f;
         for (size_t i = 0; i < predicted.height; ++i) {
             for (size_t j = 0; j < predicted.width; ++j) {
                 // Add small epsilon to avoid log(0)
-                loss -= target.data[0][i][j] * std::log(predicted.data[0][i][j] + 1e-10);
+                loss -= target.data[0][i][j] * std::log(predicted.data[0][i][j] + 1e-10f);
             }
         }
         return loss / predicted.width;  // Average over batch
@@ -820,15 +813,15 @@ class CrossEntropyLoss : public Loss {
 
 class MSELoss : public Loss {
    public:
-    double compute(const Tensor3D &predicted, const Tensor3D &target) const override {
-        double loss = 0.0;
+    float compute(const Tensor3D &predicted, const Tensor3D &target) const override {
+        float loss = 0.0f;
         for (size_t i = 0; i < predicted.height; ++i) {
             for (size_t j = 0; j < predicted.width; ++j) {
-                double diff = predicted.data[0][i][j] - target.data[0][i][j];
+                float diff = predicted.data[0][i][j] - target.data[0][i][j];
                 loss += diff * diff;
             }
         }
-        return loss / (2.0 * predicted.width);  // Average over batch and divide by 2
+        return loss / (2.0f * predicted.width);  // Average over batch and divide by 2
     }
 
     Tensor3D derivative(const Tensor3D &predicted, const Tensor3D &target) const override {
@@ -848,10 +841,10 @@ class Optimiser {
 
 class SGDOptimiser : public Optimiser {
    private:
-    double learning_rate;
+    float learning_rate;
 
    public:
-    SGDOptimiser(double lr = 0.1) : learning_rate(lr) {}
+    SGDOptimiser(float lr = 0.1f) : learning_rate(lr) {}
 
     void compute_and_apply_updates(
         const std::vector<std::unique_ptr<Layer>> &layers,
@@ -879,11 +872,11 @@ class SGDOptimiser : public Optimiser {
 
 class AdamWOptimiser : public Optimiser {
    private:
-    double learning_rate;
-    double beta1;
-    double beta2;
-    double epsilon;
-    double weight_decay;
+    float learning_rate;
+    float beta1;
+    float beta2;
+    float epsilon;
+    float weight_decay;
     int t;                                                                   // timestep
     std::vector<std::pair<std::vector<Tensor3D>, std::vector<Tensor3D>>> m;  // first moment
     std::vector<std::pair<std::vector<Tensor3D>, std::vector<Tensor3D>>> v;  // second moment
@@ -902,7 +895,7 @@ class AdamWOptimiser : public Optimiser {
      * @param eps The epsilon parameter for numerical stability (default: 1e-8).
      * @param wd The weight decay parameter (default: 0.01).
      */
-    AdamWOptimiser(double lr = 0.001, double b1 = 0.9, double b2 = 0.999, double eps = 1e-8, double wd = 0.01)
+    AdamWOptimiser(float lr = 0.001f, float b1 = 0.9f, float b2 = 0.999f, float eps = 1e-8f, float wd = 0.01f)
         : learning_rate(lr), beta1(b1), beta2(b2), epsilon(eps), weight_decay(wd), t(0) {}
 
     /**
@@ -971,7 +964,7 @@ class AdamWOptimiser : public Optimiser {
                 Tensor3D v_hat = v[layer_index].first[param_no] * (1.0 / (1.0 - std::pow(beta2, t)));
 
                 // compute the Adam update
-                Tensor3D update = m_hat.hadamard(v_hat.apply([this](double x) { return 1.0 / (std::sqrt(x) + epsilon); }));
+                Tensor3D update = m_hat.hadamard(v_hat.apply([this](float x) { return 1.0f / (std::sqrt(x) + epsilon); }));
 
                 // apply weight decay
                 layers[layer_index]->weights[param_no] =
@@ -998,7 +991,7 @@ class AdamWOptimiser : public Optimiser {
                 Tensor3D v_hat = v[layer_index].second[param_no] * (1.0 / (1.0 - std::pow(beta2, t)));
 
                 // compute the Adam update
-                Tensor3D update = m_hat.hadamard(v_hat.apply([this](double x) { return 1.0 / (std::sqrt(x) + epsilon); }));
+                Tensor3D update = m_hat.hadamard(v_hat.apply([this](float x) { return 1.0f / (std::sqrt(x) + epsilon); }));
 
                 // no weight decay for biases
 
@@ -1083,8 +1076,8 @@ class NeuralNetwork {
                     layers.push_back(std::make_unique<PoolingLayer>(spec.pool_size, spec.pool_stride, spec.pool_mode));
 
                     // update 'previous' layer dimensions with formula for pooling layer output dimensions
-                    dims.height = std::floor((dims.height - spec.pool_size) / static_cast<double>(spec.pool_stride) + 1);
-                    dims.width = std::floor((dims.width - spec.pool_size) / static_cast<double>(spec.pool_stride) + 1);
+                    dims.height = std::floor((dims.height - spec.pool_size) / static_cast<float>(spec.pool_stride) + 1);
+                    dims.width = std::floor((dims.width - spec.pool_size) / static_cast<float>(spec.pool_stride) + 1);
                     break;
                 }
                 case LayerSpec::DENSE: {
@@ -1110,7 +1103,7 @@ class NeuralNetwork {
         
         for (const auto& channel : tensor.data) {
             for (const auto& row : channel) {
-                file.write(reinterpret_cast<const char*>(row.data()), row.size() * sizeof(double));
+                file.write(reinterpret_cast<const char*>(row.data()), row.size() * sizeof(float));
             }
         }
     }
@@ -1125,7 +1118,7 @@ class NeuralNetwork {
         
         for (auto& channel : tensor.data) {
             for (auto& row : channel) {
-                file.read(reinterpret_cast<char*>(row.data()), row.size() * sizeof(double));
+                file.read(reinterpret_cast<char*>(row.data()), row.size() * sizeof(float));
             }
         }
     }
@@ -1134,10 +1127,10 @@ class NeuralNetwork {
    public:
 
     struct EvalMetrics {
-        double accuracy;
-        double precision;
-        double recall;
-        double f1_score;
+        float accuracy;
+        float precision;
+        float recall;
+        float f1_score;
 
         friend std::ostream &operator<<(std::ostream &os, const EvalMetrics &metrics) {
             os << "accuracy: " << metrics.accuracy << ", precision: " << metrics.precision << ", recall: " << metrics.recall
@@ -1296,8 +1289,8 @@ class NeuralNetwork {
             // find predicted and actual class
             int predicted_class = 0;
             int actual_class = 0;
-            double max_pred = predicted.data[0][0][0];
-            double max_target = target.data[0][0][0];
+            float max_pred = predicted.data[0][0][0];
+            float max_target = target.data[0][0][0];
 
             for (int i = 1; i < 10; ++i) {
                 if (predicted.data[0][i][0] > max_pred) {
@@ -1322,12 +1315,12 @@ class NeuralNetwork {
         }
 
         // calculate metrics
-        double accuracy = static_cast<double>(correct_predictions) / total_samples;
+        float accuracy = static_cast<float>(correct_predictions) / total_samples;
 
         // calculate macro-averaged precision, recall and f1
-        double total_precision = 0.0;
-        double total_recall = 0.0;
-        double total_f1 = 0.0;
+        float total_precision = 0.0f;
+        float total_recall = 0.0f;
+        float total_f1 = 0.0f;
         int num_classes = 0;
 
         for (int i = 0; i < 10; ++i) {
@@ -1336,9 +1329,9 @@ class NeuralNetwork {
                 continue;
             }
 
-            double class_precision = true_positives[i] / static_cast<double>(true_positives[i] + false_positives[i]);
-            double class_recall = true_positives[i] / static_cast<double>(true_positives[i] + false_negatives[i]);
-            double class_f1 = 2 * (class_precision * class_recall) / (class_precision + class_recall);
+            float class_precision = true_positives[i] / static_cast<float>(true_positives[i] + false_positives[i]);
+            float class_recall = true_positives[i] / static_cast<float>(true_positives[i] + false_negatives[i]);
+            float class_f1 = 2 * (class_precision * class_recall) / (class_precision + class_recall);
 
             // handle cases where precision + recall = 0
             if (std::isnan(class_f1)) {
@@ -1352,9 +1345,9 @@ class NeuralNetwork {
         }
 
         // compute macro averages
-        double macro_precision = total_precision / num_classes;
-        double macro_recall = total_recall / num_classes;
-        double macro_f1 = total_f1 / num_classes;
+        float macro_precision = total_precision / num_classes;
+        float macro_recall = total_recall / num_classes;
+        float macro_f1 = total_f1 / num_classes;
 
         return {accuracy, macro_precision, macro_recall, macro_f1};
     }
@@ -1370,12 +1363,12 @@ class NeuralNetwork {
             // shuffle training data at start of each epoch
             std::shuffle(training_set.begin(), training_set.end(), std::random_device());
 
-            double epoch_loss = 0.0;
+            float epoch_loss = 0.0f;
 
             // batch loop
             for (int batch = 0; batch < batches_per_epoch; ++batch) {
                 std::vector<std::pair<std::vector<Tensor3D>, std::vector<Tensor3D>>> batch_gradients;
-                double batch_loss = 0.0;
+                float batch_loss = 0.0f;
 
                 // accumulate gradients over batch
                 for (int i = 0; i < batch_size; ++i) {
@@ -1384,7 +1377,7 @@ class NeuralNetwork {
                     auto &target = training_set[idx][1];
 
                     // apply augmentation to input
-                    auto augmented_input = augment_image(input);
+                    auto augmented_input = augment_image(input, 5.0f, 0.2f, 20.0f, true);
                     
                     // use augmented input for training
                     auto gradients = calculate_gradients(augmented_input, target);
@@ -1436,8 +1429,10 @@ class NeuralNetwork {
         }
     }
 
-    Tensor3D augment_image(const Tensor3D& input, double offset_range = 5.0, double scale_range = 0.2, double angle_range = 20.0) {
-        
+    Tensor3D augment_image(const Tensor3D& input, float offset_range = 5.0f, float scale_range = 0.2f, float angle_range = 20.0f, bool training = false) {
+        if (!training) {
+            return input;
+        }
         // create output tensor of same size
         Tensor3D augmented(1, 28, 28);
         
@@ -1452,15 +1447,15 @@ class NeuralNetwork {
         
         // random slight rotation (-15 to 15 degrees)
         std::uniform_real_distribution<> angle_dist(-angle_range, angle_range);
-        double angle = angle_dist(gen) * M_PI / 180.0;
+        float angle = angle_dist(gen) * M_PI / 180.0f;
         
         // random slight scaling (0.9 to 1.1)
-        std::uniform_real_distribution<> scale_dist(1.0 - scale_range, 1.0 + scale_range);
-        double scale = scale_dist(gen);
+        std::uniform_real_distribution<> scale_dist(1.0f - scale_range, 1.0f + scale_range);
+        float scale = scale_dist(gen);
         
         // centre point for rotation
-        double centerX = input.width / 2.0;
-        double centerY = input.height / 2.0;
+        float centerX = input.width / 2.0f;
+        float centerY = input.height / 2.0f;
         
         // fill output tensor with transformed input
         for (size_t y = 0; y < augmented.height; y++) {
@@ -1468,16 +1463,16 @@ class NeuralNetwork {
                 // work backwards from output to input coordinates to avoid gaps
                 
                 // translate to origin
-                double dx = x - centerX - offsetX;
-                double dy = y - centerY - offsetY;
+                float dx = x - centerX - offsetX;
+                float dy = y - centerY - offsetY;
                 
                 // unscale
                 dx /= scale;
                 dy /= scale;
                 
                 // unrotate
-                double srcX = dx * cos(-angle) - dy * sin(-angle) + centerX;
-                double srcY = dx * sin(-angle) + dy * cos(-angle) + centerY;
+                float srcX = dx * cos(-angle) - dy * sin(-angle) + centerX;
+                float srcY = dx * sin(-angle) + dy * cos(-angle) + centerY;
                 
                 // if source pixel is within bounds, copy it
                 if (srcX >= 0 && srcX < input.width - 1 && 
@@ -1489,10 +1484,10 @@ class NeuralNetwork {
                     int y0 = static_cast<int>(srcY);
                     int y1 = y0 + 1;
                     
-                    double wx1 = srcX - x0;
-                    double wx0 = 1 - wx1;
-                    double wy1 = srcY - y0;
-                    double wy0 = 1 - wy1;
+                    float wx1 = srcX - x0;
+                    float wx0 = 1 - wx1;
+                    float wy1 = srcY - y0;
+                    float wy0 = 1 - wy1;
                     
                     augmented.data[0][y][x] = 
                         input.data[0][y0][x0] * wx0 * wy0 +
@@ -1659,7 +1654,10 @@ class NeuralNetwork {
     }
 
     // method for WASM interface for interactive demo
-    std::vector<double> predict_digit(const std::vector<double>& input_data) {
+    std::vector<float> predict_digit(const std::vector<float>& input_data) {
+        if (input_data.size() != 28 * 28) {
+            throw std::runtime_error("input data must be a flat vector of 28x28 pixels");
+        }
         // convert flat vector to Tensor3D (assuming MNIST 28x28 input)
         Tensor3D input(1, 28, 28);
         for (int i = 0; i < 28; i++) {
@@ -1672,7 +1670,7 @@ class NeuralNetwork {
         Tensor3D output = feedforward(input);
         
         // convert output to vector
-        std::vector<double> result(10);
+        std::vector<float> result(10);
         for (int i = 0; i < 10; i++) {
             result[i] = output.data[0][i][0];
         }
@@ -1681,14 +1679,12 @@ class NeuralNetwork {
 };
 
 // todo:
-// evaluation on test set
 // implement other modes than same
 // implement different strides in convlayer
 // change to float values in Tensor3D
 // batch normalisation
 // dropout
 
-// INTERACTIVE DRAWING DIGIT RECOGNITION ON WEBSITE
 
 std::pair<std::vector<std::vector<Tensor3D>>, std::vector<std::vector<Tensor3D>>> load_mnist_data(std::string path_to_data) {
     // create training set from binary image data files
@@ -1709,14 +1705,14 @@ std::pair<std::vector<std::vector<Tensor3D>>, std::vector<std::vector<Tensor3D>>
             // fill the tensor with normalised pixel values
             for (int row = 0; row < 28; ++row) {
                 for (int col = 0; col < 28; ++col) {
-                    double normalised_pixel = static_cast<double>(full_digit_data[j + row * 28 + col]) / 255.0;
+                    float normalised_pixel = static_cast<float>(full_digit_data[j + row * 28 + col]) / 255.0f;
                     input_data.data[0][row][col] = normalised_pixel;
                 }
             }
 
             // create the label Tensor3D
             Tensor3D label_data(10, 1);
-            std::vector<std::vector<double>> data;
+            std::vector<std::vector<float>> data;
 
             // construct the label Tensor3D with 1.0 in the position of the digit and zeros elsewhere
             for (size_t l = 0; l < i; ++l) {
