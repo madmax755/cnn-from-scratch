@@ -1383,8 +1383,11 @@ class NeuralNetwork {
                     auto &input = training_set[idx][0];
                     auto &target = training_set[idx][1];
 
-                    // accumulate gradients
-                    auto gradients = calculate_gradients(input, target);
+                    // apply augmentation to input
+                    auto augmented_input = augment_image(input);
+                    
+                    // use augmented input for training
+                    auto gradients = calculate_gradients(augmented_input, target);
 
                     // initialise batch_gradients if first sample
                     if (i == 0) {
@@ -1426,9 +1429,81 @@ class NeuralNetwork {
                     std::cout << "epoch " << epoch + 1 << ", batch " << batch << "/" << batches_per_epoch << ": " << metrics << std::endl;
                 }
             }
-
+        
+            std::string model_path = "model" + std::to_string(epoch) + ".bin";
+            save_model(model_path);
             
         }
+    }
+
+    Tensor3D augment_image(const Tensor3D& input, double offset_range = 5.0, double scale_range = 0.2, double angle_range = 20.0) {
+        
+        // create output tensor of same size
+        Tensor3D augmented(1, 28, 28);
+        
+        // initialise random number generation
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        
+        // random offset range (-2 to 2 pixels)
+        std::uniform_int_distribution<> offset_dist(-offset_range, offset_range);
+        int offsetX = offset_dist(gen);
+        int offsetY = offset_dist(gen);
+        
+        // random slight rotation (-15 to 15 degrees)
+        std::uniform_real_distribution<> angle_dist(-angle_range, angle_range);
+        double angle = angle_dist(gen) * M_PI / 180.0;
+        
+        // random slight scaling (0.9 to 1.1)
+        std::uniform_real_distribution<> scale_dist(1.0 - scale_range, 1.0 + scale_range);
+        double scale = scale_dist(gen);
+        
+        // centre point for rotation
+        double centerX = input.width / 2.0;
+        double centerY = input.height / 2.0;
+        
+        // fill output tensor with transformed input
+        for (size_t y = 0; y < augmented.height; y++) {
+            for (size_t x = 0; x < augmented.width; x++) {
+                // work backwards from output to input coordinates to avoid gaps
+                
+                // translate to origin
+                double dx = x - centerX - offsetX;
+                double dy = y - centerY - offsetY;
+                
+                // unscale
+                dx /= scale;
+                dy /= scale;
+                
+                // unrotate
+                double srcX = dx * cos(-angle) - dy * sin(-angle) + centerX;
+                double srcY = dx * sin(-angle) + dy * cos(-angle) + centerY;
+                
+                // if source pixel is within bounds, copy it
+                if (srcX >= 0 && srcX < input.width - 1 && 
+                    srcY >= 0 && srcY < input.height - 1) {
+                    
+                    // bilinear interpolation
+                    int x0 = static_cast<int>(srcX);
+                    int x1 = x0 + 1;
+                    int y0 = static_cast<int>(srcY);
+                    int y1 = y0 + 1;
+                    
+                    double wx1 = srcX - x0;
+                    double wx0 = 1 - wx1;
+                    double wy1 = srcY - y0;
+                    double wy0 = 1 - wy1;
+                    
+                    augmented.data[0][y][x] = 
+                        input.data[0][y0][x0] * wx0 * wy0 +
+                        input.data[0][y0][x1] * wx1 * wy0 +
+                        input.data[0][y1][x0] * wx0 * wy1 +
+                        input.data[0][y1][x1] * wx1 * wy1;
+                }
+            }
+        }
+        
+        return augmented;
     }
 
     // save model to file - must be called after training/forward pass
@@ -1671,25 +1746,24 @@ int main() {
 
     // network architecture setup
     NeuralNetwork nn;
-    nn.add_conv_layer(8, 3);
-    nn.add_pool_layer();
     nn.add_conv_layer(16, 3);
     nn.add_pool_layer();
     nn.add_conv_layer(32, 3);
     nn.add_pool_layer();
+    nn.add_conv_layer(64, 3);
+    nn.add_pool_layer();
+    nn.add_dense_layer(200);
     nn.add_dense_layer(100);
     nn.add_dense_layer(10, "softmax");
     nn.set_loss(std::make_unique<CrossEntropyLoss>());
     nn.set_optimiser(std::make_unique<AdamWOptimiser>());
 
     // training hyperparameters
-    const int num_epochs = 3;
+    const int num_epochs = 20;
     const int batch_size = 100;
 
     nn.train(training_set, eval_set, num_epochs, batch_size);
     std::cout << "Training complete\n" << std::endl;
 
-    nn.save_model("model.bin");
-    std::cout << "Model saved to model.bin\n\n" << std::endl;
     return 0;
 }
