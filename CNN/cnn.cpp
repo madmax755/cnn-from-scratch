@@ -1284,7 +1284,7 @@ class NeuralNetwork {
             const auto &target = sample[1];
 
             // get network prediction
-            Tensor3D predicted = feedforward(input);
+            Tensor3D predicted = feedforward(augment_image(input));
 
             // find predicted and actual class
             int predicted_class = 0;
@@ -1377,7 +1377,7 @@ class NeuralNetwork {
                     auto &target = training_set[idx][1];
 
                     // apply augmentation to input
-                    auto augmented_input = augment_image(input, 5.0f, 0.2f, 20.0f, true);
+                    auto augmented_input = augment_image(input);
                     
                     // use augmented input for training
                     auto gradients = calculate_gradients(augmented_input, target);
@@ -1429,10 +1429,7 @@ class NeuralNetwork {
         }
     }
 
-    Tensor3D augment_image(const Tensor3D& input, float offset_range = 5.0f, float scale_range = 0.2f, float angle_range = 20.0f, bool training = false) {
-        if (!training) {
-            return input;
-        }
+    Tensor3D augment_image(const Tensor3D& input, float offset_range = 5.0f, float scale_range = 0.2f, float angle_range = 20.0f) {
         // create output tensor of same size
         Tensor3D augmented(1, 28, 28);
         
@@ -1681,7 +1678,6 @@ class NeuralNetwork {
 // todo:
 // implement other modes than same
 // implement different strides in convlayer
-// change to float values in Tensor3D
 // batch normalisation
 // dropout
 

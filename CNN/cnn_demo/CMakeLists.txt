@@ -10,7 +10,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} \
     -s EXPORTED_RUNTIME_METHODS=['ccall','cwrap'] \
     -s EXPORTED_FUNCTIONS=['_malloc','_free'] \
     -s NO_DISABLE_EXCEPTION_CATCHING=1 \
-    --preload-file ${CMAKE_SOURCE_DIR}/model_large.bin@/model_large.bin \
+    --preload-file ${CMAKE_SOURCE_DIR}/float16.32.64.200.100.bin@/float16.32.64.200.100.bin \
     -lembind")
 
 add_executable(cnn_wasm wasm_bindings.cpp)
