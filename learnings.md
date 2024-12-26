@@ -1,0 +1,15 @@
+- auto type for automatic type deduction
+- references are helpful in for (each) loops so act like normal rather than the element being copied to a new variable 
+- emplace_back() is like push_back() but can pass parameters directly to the constructor e.g. neurons.emplace_back(0, "hi", 4) is the same as neurons.push_back(Neuron(0, "hi", 4)) if neurons has type std::vector<Neuron> but avoids creating a temporary object
+- cant use cout directly on a vector (duh), iterate through and do manually or overload the << operator
+- when overloading a binary operator, if the overloading is defined in the class on which the overloading is to be performed, the first item is implicitly passed into the method, so only the other item needs to be specified as a parameter.
+- do not need to dereference a function to call it. e.g. double func* function; func("hi") is fine. explicit dereferencing can be done (*func)("hello") but not necessary
+- types are inferred in some circumstances i.e. vector<vector<int>> container; container.push_back({{8}, {4}}) is fine - no need to specify the type (although you can)
+- relu training requires much lower learning rate for reliable training with SGD
+- relu does not like NAG (parameter space not smooth enough?), but likes Adam.
+- you can unpack a struct into multiple variables with auto [a, b] = my_struct;
+- shuffling training data is very important for efficient training
+- order of conditions in if statements is important e.g. if (!layers.empty() && dynamic_cast<DenseLayer*>(layers.back().get())) is a valid solution to the undefined behaviour of layers.back() when layers is empty.
+- while base-type pointers and derived-type pointers can point to the same object, they are not the same type and should not be used interchangeably. e.g. if (dynamic_cast<DerivedType*>(base_pointer)) is not the same as if (dynamic_cast<BaseType*>(derived_pointer))
+- dynamic_cast can be used to check if a pointer is of a certain type and safely return a null pointer if it is not. e.g. ConvolutionLayer* conv_layer = dynamic_cast<ConvolutionLayer*>(layer); if (!conv_layer) { throw std::runtime_error("Layer is not a convolution layer"); }
+- the -> syntax is used to access members of a pointer to an object. e.g. layer->forward(input) is the same as (*layer).forward(input)
