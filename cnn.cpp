@@ -1173,7 +1173,19 @@ class NeuralNetwork {
      * @brief Sets the loss function for the neural network.
      * @param new_loss A unique pointer to the new Loss object.
      */
-    void set_loss(std::unique_ptr<Loss> new_loss) { loss = std::move(new_loss); }
+    void set_loss(std::unique_ptr<Loss> new_loss) {
+        bool layers_empty = layer_specs.empty();
+        bool last_layer_is_softmax = layer_specs.end()->activation == "softmax";
+        bool new_loss_is_cross_entropy = dynamic_cast<CrossEntropyLoss*>(new_loss.get()) != nullptr;
+
+        if (layers_empty) {
+            throw std::runtime_error("no layers created yet - set layers first");
+        } else if (!last_layer_is_softmax and new_loss_is_cross_entropy){
+            throw std::runtime_error("last layer must be softmax for cross entropy loss");
+        }
+
+        loss = std::move(new_loss); 
+    }
 
     /**
      * @brief Performs feedforward operation through all layers of the network.
@@ -1736,7 +1748,7 @@ int main() {
     
     auto [training_set, eval_set] = load_mnist_data("../mnist data");
 
-    // network architecture setup
+    // network architecture setup   
     NeuralNetwork nn;
     nn.add_conv_layer(16, 3);
     nn.add_pool_layer();

@@ -1,0 +1,5 @@
+.vscode
+log.md
+model.bin
+build
+*.bin
