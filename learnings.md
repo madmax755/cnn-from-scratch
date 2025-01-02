@@ -13,3 +13,11 @@
 - while base-type pointers and derived-type pointers can point to the same object, they are not the same type and should not be used interchangeably. e.g. if (dynamic_cast<DerivedType*>(base_pointer)) is not the same as if (dynamic_cast<BaseType*>(derived_pointer))
 - dynamic_cast can be used to check if a pointer is of a certain type and safely return a null pointer if it is not. e.g. ConvolutionLayer* conv_layer = dynamic_cast<ConvolutionLayer*>(layer); if (!conv_layer) { throw std::runtime_error("Layer is not a convolution layer"); }
 - the -> syntax is used to access members of a pointer to an object. e.g. layer->forward(input) is the same as (*layer).forward(input)
+- std::vector has a range constructor i.e. std::vector<int> slice(data.begin(), data.begin() + 5); fills slice wiht the first 5 elements of data.
+- references and pointers both store memory addresses, but the compiler treats them differently. References auto dereference, pointers do not. References are treated more like aliases, e.g. if you do &ref then this will return the address of the data the ref points to rather than where the reference itself is stored - unlike pointers. 
+- & has two distinct uses. When in definitions/declarations it defines a variable as a reference, while when in expressions it gets the memory address of the item it acts on.
+    -  e.g. for (float &element : tensor.data) {
+            file.read(reinterpret_cast<char *>(&element), sizeof(float));
+        }
+    - the first & specifies that element should be a reference to the actual data in the tensor.data vector.
+    - the second & gets the address of this reference which (as references act as aliases) gives the address of the referenced data
