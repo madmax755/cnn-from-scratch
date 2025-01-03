@@ -107,7 +107,9 @@ class Tensor3D {
         return Tensor3D(1, height, width, new_data);
     }
 
-    std::vector<float> get_flat_data() const { return data; }
+    std::vector<float>& get_flat_data() { return data; }
+
+    const std::vector<float>& get_flat_data() const { return data; }
 
     // compute dot product with a kernel centered at specific position - the argument must be the kernel
     float dot_with_kernel_at_position(const Tensor3D &kernel, size_t start_x, size_t start_y) const {
@@ -1446,7 +1448,7 @@ class NeuralNetwork {
                 optimiser->compute_and_apply_updates(layers, batch_gradients);
 
                 // print batch progress
-                if (batch % 1 == 0) {
+                if (batch % 30 == 0) {
                     EvalMetrics metrics = evaluate(eval_set);
                     std::cout << "epoch " << epoch + 1 << ", batch " << batch << "/" << batches_per_epoch << ": " << metrics
                               << std::endl;
@@ -1757,17 +1759,18 @@ int main() {
 
     // network architecture setup
     NeuralNetwork nn;
-    nn.add_conv_layer(16, 3);
-    nn.add_pool_layer();
+    nn.add_conv_layer(32, 3);
     nn.add_conv_layer(32, 3);
     nn.add_pool_layer();
-    nn.add_dense_layer(100);
+    nn.add_conv_layer(64, 5);
+    nn.add_pool_layer();
+    nn.add_dense_layer(128);
     nn.add_dense_layer(10, "softmax");
     nn.set_loss(std::make_unique<CrossEntropyLoss>());
     nn.set_optimiser(std::make_unique<AdamWOptimiser>());
 
     // training hyperparameters
-    const int num_epochs = 20;
+    const int num_epochs = 30;
     const int batch_size = 100;
 
     nn.train(training_set, eval_set, num_epochs, batch_size);
