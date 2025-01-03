@@ -1175,7 +1175,7 @@ class NeuralNetwork {
      */
     void set_loss(std::unique_ptr<Loss> new_loss) {
         bool layers_empty = layer_specs.empty();
-        bool last_layer_is_softmax = layer_specs.end()->activation == "softmax";
+        bool last_layer_is_softmax = layer_specs.back().activation == "softmax";
         bool new_loss_is_cross_entropy = dynamic_cast<CrossEntropyLoss*>(new_loss.get()) != nullptr;
 
         if (layers_empty) {
@@ -1429,7 +1429,7 @@ class NeuralNetwork {
                 optimiser->compute_and_apply_updates(layers, batch_gradients);
 
                 // print batch progress
-                if (batch % 10 == 0) {
+                if (batch % 1 == 0) {
                     EvalMetrics metrics = evaluate(eval_set);
                     std::cout << "epoch " << epoch + 1 << ", batch " << batch << "/" << batches_per_epoch << ": " << metrics << std::endl;
                 }
@@ -1746,7 +1746,7 @@ std::pair<std::vector<std::vector<Tensor3D>>, std::vector<std::vector<Tensor3D>>
 
 int main() {
     
-    auto [training_set, eval_set] = load_mnist_data("../mnist data");
+    auto [training_set, eval_set] = load_mnist_data("mnist-data");
 
     // network architecture setup   
     NeuralNetwork nn;
@@ -1754,9 +1754,6 @@ int main() {
     nn.add_pool_layer();
     nn.add_conv_layer(32, 3);
     nn.add_pool_layer();
-    nn.add_conv_layer(64, 3);
-    nn.add_pool_layer();
-    nn.add_dense_layer(200);
     nn.add_dense_layer(100);
     nn.add_dense_layer(10, "softmax");
     nn.set_loss(std::make_unique<CrossEntropyLoss>());
