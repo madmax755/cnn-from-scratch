@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <cmath>
 #include <fstream>
@@ -11,7 +12,6 @@
 #include <string>
 #include <thread>
 #include <vector>
-#include <cassert>
 
 // ---------------------------------- ACTIVATION FUNCTIONS -------------------------------------------
 
@@ -44,9 +44,13 @@ std::vector<unsigned char> read_file(const std::string &path) {
 }
 
 class Tensor3D {
-   public:
-    // data is stored as a 1D vector for cache-friendly access. data[d*height*width + h*width + w] is the element at depth d, height h, width w
+   private:
+    // data is stored as a 1D vector for cache-friendly access. data[d*height*width + h*width + w] is the element at depth d,
+    // height h, width w
     std::vector<float> data;
+
+   public:
+    
     size_t height, width, depth;
 
     Tensor3D() : height(0), width(0), depth(0) {}
@@ -60,7 +64,8 @@ class Tensor3D {
     }
 
     // for construction using 1D vector
-    Tensor3D(size_t depth, size_t height, size_t width, const std::vector<float> &data) : height(height), width(width), depth(depth) {
+    Tensor3D(size_t depth, size_t height, size_t width, const std::vector<float> &data)
+        : height(height), width(width), depth(depth) {
         if (data.size() != depth * height * width) {
             throw std::invalid_argument("data length and dimension mismatch");
         }
@@ -68,25 +73,22 @@ class Tensor3D {
     }
 
     // for construction using dxhxw array
-    Tensor3D(size_t depth, size_t height, size_t width, const std::vector<std::vector<std::vector<float>>> &data) : height(height), width(width), depth(depth) {
+    Tensor3D(size_t depth, size_t height, size_t width, const std::vector<std::vector<std::vector<float>>> &data)
+        : height(height), width(width), depth(depth) {
         if (data.size() != depth or data[0].size() != height or data[0][0].size() != width) {
             throw std::invalid_argument("data length and dimension mismatch");
         }
         for (size_t d = 0; d < depth; d++) {
             for (size_t h = 0; h < height; h++) {
                 for (size_t w = 0; w < width; w++) {
-                    this->data[d*height*width + h*width + w] = data[d][h][w];
+                    this->data[d * height * width + h * width + w] = data[d][h][w];
                 }
             }
         }
     }
 
-    size_t index(size_t d, size_t h, size_t w) {
-        return d*(height * width) + h*(width) + w;
-    }
-    const size_t index(size_t d, size_t h, size_t w) const {
-        return d*(height * width) + h*(width) + w;
-    }
+    size_t index(size_t d, size_t h, size_t w) { return d * (height * width) + h * (width) + w; }
+    const size_t index(size_t d, size_t h, size_t w) const { return d * (height * width) + h * (width) + w; }
 
     // overload () for getting item from tensor e.g. tensor(1,2,5) will return the (reference to the) element at depth 1, height
     // 2, width 5.
@@ -104,6 +106,8 @@ class Tensor3D {
         std::vector<float> new_data(data.begin() + d * slice_size, data.begin() + d * slice_size + slice_size);
         return Tensor3D(1, height, width, new_data);
     }
+
+    std::vector<float> get_flat_data() const { return data; }
 
     // compute dot product with a kernel centered at specific position - the argument must be the kernel
     float dot_with_kernel_at_position(const Tensor3D &kernel, size_t start_x, size_t start_y) const {
@@ -224,7 +228,7 @@ class Tensor3D {
     }
 
     Tensor3D operator+(const Tensor3D &other) const {
-        if (height != other.height || width != other.width || depth != other.depth) {
+        if (height != other.height or width != other.width or depth != other.depth) {
             throw std::invalid_argument("tensor dimensions don't match for addition");
         }
 
@@ -252,7 +256,7 @@ class Tensor3D {
     }
 
     Tensor3D operator-(const Tensor3D &other) const {
-        if (height != other.height || width != other.width || depth != other.depth) {
+        if (height != other.height or width != other.width or depth != other.depth) {
             throw std::invalid_argument("tensor dimensions don't match for subtraction");
         }
 
@@ -280,7 +284,7 @@ class Tensor3D {
     }
 
     Tensor3D hadamard(const Tensor3D &other) const {
-        if (height != other.height || width != other.width || depth != other.depth) {
+        if (height != other.height or width != other.width or depth != other.depth) {
             throw std::invalid_argument("tensor dimensions don't match for Hadamard product");
         }
 
@@ -378,7 +382,7 @@ class Tensor3D {
 
     Tensor3D unflatten(size_t new_depth, size_t new_height, size_t new_width) const {
         // check if dimensions match
-        if (depth != 1 || width != 1 || height != new_depth * new_height * new_width) {
+        if (depth != 1 or width != 1 or height != new_depth * new_height * new_width) {
             throw std::runtime_error("cannot unflatten tensor - dimensions don't match. Expected flattened tensor of height " +
                                      std::to_string(new_depth * new_height * new_width) + " but got height " +
                                      std::to_string(height));
@@ -440,25 +444,16 @@ class Tensor3D {
         return result;
     }
 
-    Tensor3D get_depth_slice(size_t depth_index) const {
-        if (depth_index >= depth) {
-            throw std::runtime_error("depth_index out of range in get_depth_slice");
-        }
-
-        Tensor3D slice(1, height, width);
-        slice.data[0] = data[depth_index];
-        return slice;
-    }
-
     void set_depth_slice(size_t depth_index, const Tensor3D &slice) {
         if (depth_index >= depth) {
             throw std::runtime_error("depth_index out of range in set_depth_slice");
         }
-        if (slice.depth != 1 || slice.height != height || slice.width != width) {
+        if (slice.depth != 1 or slice.height != height or slice.width != width) {
             throw std::runtime_error("slice dimensions don't match in set_depth_slice");
         }
 
-        data[depth_index] = slice.data[0];
+        // Copy the entire slice
+        std::copy(slice.data.begin(), slice.data.begin() + height * width, data.begin() + depth_index * height * width);
     }
 
     friend std::ostream &operator<<(std::ostream &os, const Tensor3D &tensor) {
@@ -619,13 +614,13 @@ class ConvolutionLayer : public Layer {
 
             for (int feature_map_index = 0; feature_map_index < weights.size(); ++feature_map_index) {
                 Tensor3D preactivation =
-                    Tensor3D::Conv(padded_input, weights[feature_map_index]) + biases[feature_map_index](0,0,0);
+                    Tensor3D::Conv(padded_input, weights[feature_map_index]) + biases[feature_map_index](0, 0, 0);
 
                 // store the preactivation for this feature map
                 tmp_z.set_depth_slice(feature_map_index, preactivation);
 
                 // apply the activation function and store the result for this feature map
-                a.data[feature_map_index] = preactivation.apply(relu).data[0];
+                a.set_depth_slice(feature_map_index, preactivation.apply(relu));
             }
 
             // copy tmp_z to z attribute
@@ -659,8 +654,8 @@ class ConvolutionLayer : public Layer {
             // sum contributions from all output channels
             for (int k = 0; k < weights.size(); k++) {
                 // extract relevant delta channel and kernel slice
-                Tensor3D relevant_d_z_slice = padded_d_z.get_depth_slice(k);
-                Tensor3D relevant_kernel_slice = weights[k].get_depth_slice(in_ch).rotate_180();
+                Tensor3D relevant_d_z_slice = padded_d_z(k);
+                Tensor3D relevant_kernel_slice = weights[k](in_ch).rotate_180();
 
                 // perform full convolution
                 Tensor3D d_input_contribution = Tensor3D::Conv(relevant_d_z_slice, relevant_kernel_slice);
@@ -682,8 +677,8 @@ class ConvolutionLayer : public Layer {
             Tensor3D d_weight(input.depth, kernel_size, kernel_size);
             for (int in_ch = 0; in_ch < input.depth; in_ch++) {
                 // extract relevant input and gradient channels
-                Tensor3D padded_input_channel = padded_input.get_depth_slice(in_ch);
-                Tensor3D d_z_channel = d_z.get_depth_slice(k);
+                Tensor3D padded_input_channel = padded_input(in_ch);
+                Tensor3D d_z_channel = d_z(k);
 
                 // compute gradient for this input-output channel pair
                 Tensor3D channel_grad = Tensor3D::Conv(padded_input_channel, d_z_channel);
@@ -785,7 +780,7 @@ class PoolingLayer : public Layer {
         if (mode == "max") {
             // for max pooling, propagate gradient only to the position where maximum was found
             // d_output should have same dimensions as the output from forward pass
-            if (d_output_unflattened.depth != max_positions.size() || d_output_unflattened.height != max_positions[0].size() ||
+            if (d_output_unflattened.depth != max_positions.size() or d_output_unflattened.height != max_positions[0].size() or
                 d_output_unflattened.width != max_positions[0][0].size()) {
                 throw std::runtime_error(
                     "d_output dimensions do not match stored max_positions dimensions in pooling layer backward pass");
@@ -1132,7 +1127,7 @@ class NeuralNetwork {
         file.write(reinterpret_cast<const char *>(&height), sizeof(height));
         file.write(reinterpret_cast<const char *>(&width), sizeof(width));
 
-        for (float element : tensor.data) {
+        for (float element : tensor.get_flat_data()) {
             file.write(reinterpret_cast<const char *>(&element), sizeof(float));
         }
     }
@@ -1145,7 +1140,7 @@ class NeuralNetwork {
 
         tensor = Tensor3D(depth, height, width);
 
-        for (float &element : tensor.data) {
+        for (float &element : tensor.get_flat_data()) {
             file.read(reinterpret_cast<char *>(&element), sizeof(float));
         }
     }
@@ -1520,7 +1515,7 @@ class NeuralNetwork {
                     float wy0 = 1 - wy1;
 
                     augmented(0, y, x) = input(0, y0, x0) * wx0 * wy0 + input(0, y0, x1) * wx1 * wy0 +
-                                              input(0, y1, x0) * wx0 * wy1 + input(0, y1, x1) * wx1 * wy1;
+                                         input(0, y1, x0) * wx0 * wy1 + input(0, y1, x1) * wx1 * wy1;
                 }
             }
         }
