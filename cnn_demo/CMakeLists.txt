@@ -11,7 +11,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} \
     -s EXPORTED_RUNTIME_METHODS=['ccall','cwrap'] \
     -s EXPORTED_FUNCTIONS=['_malloc','_free'] \
     -s NO_DISABLE_EXCEPTION_CATCHING=1 \
-    --preload-file ${CMAKE_SOURCE_DIR}/flatmodel.bin@/flatmodel.bin \
+    --preload-file ${CMAKE_SOURCE_DIR}/flatmodel_large.bin@/flatmodel_large.bin \
     -lembind")
-    
+
 add_executable(cnn_wasm wasm_bindings.cpp)
