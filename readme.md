@@ -10,7 +10,7 @@ A CNN neural network architecture implemented from scratch in C++ for learning p
   - Tensor3D class for efficient linearised 3D data handling
   - AdamW optimiser
   - Model serialisation (save/load functionality)
-- Trained model on MNIST dataset (+augmentation) achieving 99.4% accuracy - see [demo](https://maxkendall.com/cnn_demo/
+- Trained model on MNIST dataset (+augmentation) achieving 99.4% accuracy - see [demo](https://maxkendall.com/cnn_demo/)
 
 ## Learning Outcomes
 - See `learnings.md` for detailed C++ insights gained during implementation.
